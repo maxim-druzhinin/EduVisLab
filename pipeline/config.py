@@ -6,8 +6,7 @@ if torch.cuda.is_available():
     DEVICE = "cuda"
     COMPUTE_TYPE = "float16"
 else:
-    # faster-whisper не поддерживает MPS напрямую — используем CPU
-    # на M1 это всё равно быстро благодаря int8
+    # faster-whisper не поддерживает MPS
     DEVICE = "cpu"
     COMPUTE_TYPE = "int8"
 
@@ -26,7 +25,7 @@ MOS_BAD  = 2.5
 # LUFS (ITU-R BS.1770-5 / EBU R128 / AES TD1004)
 LUFS_NORM_HIGH = -14.0   # YouTube не режет ниже этого
 LUFS_NORM_LOW  = -23.0   # EBU R128 нижняя граница нормы
-LUFS_TOO_QUIET = -30.0   # YouTube не поднимает — плохой UX
+LUFS_TOO_QUIET = -30.0   # при этом YouTube не поднимает сам
 LUFS_TOO_LOUD  =  -6.0   # граничит с клиппингом
 
 # Клиппинг (эмпирический стандарт аудиоинженерии)
