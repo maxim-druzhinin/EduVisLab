@@ -1,0 +1,51 @@
+import torch
+
+# ─── Device auto-detection ───────────────────────────────────────────────────
+
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+    COMPUTE_TYPE = "float16"
+else:
+    # faster-whisper не поддерживает MPS напрямую — используем CPU
+    # на M1 это всё равно быстро благодаря int8
+    DEVICE = "cpu"
+    COMPUTE_TYPE = "int8"
+
+# ─── Transcription ───────────────────────────────────────────────────────────
+
+WHISPER_MODEL = "large-v2"
+WHISPER_LANGUAGE = "ru"
+WHISPER_CONDITION_ON_PREV = False   # сохраняем filler words
+
+# ─── Audio quality thresholds ────────────────────────────────────────────────
+
+# DNSMOS (1–5 шкала, ITU-T P.835 / Reddy et al. ICASSP 2022)
+MOS_GOOD = 3.5
+MOS_BAD  = 2.5
+
+# LUFS (ITU-R BS.1770-5 / EBU R128 / AES TD1004)
+LUFS_NORM_HIGH = -14.0   # YouTube не режет ниже этого
+LUFS_NORM_LOW  = -23.0   # EBU R128 нижняя граница нормы
+LUFS_TOO_QUIET = -30.0   # YouTube не поднимает — плохой UX
+LUFS_TOO_LOUD  =  -6.0   # граничит с клиппингом
+
+# Клиппинг (эмпирический стандарт аудиоинженерии)
+CLIPPING_THRESHOLD      = 0.99   # амплитуда выше которой считаем клиппинг
+CLIPPING_RATIO_CRITICAL = 0.001  # 0.1% сэмплов → клиппинг есть
+
+# SNR (Loizou 2007 "Speech Enhancement" / ANSI S3.5-1997)
+SNR_GOOD = 20.0   # > 20 dB — чистая речь
+SNR_OK   = 10.0   # 10–20 dB — терпимо
+# < 10 dB — шум мешает пониманию
+
+# ─── silero-VAD ───────────────────────────────────────────────────────────────
+
+VAD_THRESHOLD          = 0.5    # порог вероятности речи
+VAD_MIN_SPEECH_MS      = 250    # минимальная длина речевого сегмента (мс)
+VAD_MIN_SILENCE_MS     = 100    # минимальная пауза между сегментами (мс)
+VAD_SPEECH_PAD_MS      = 30     # отступ вокруг речевых сегментов (мс)
+
+# ─── Paths ───────────────────────────────────────────────────────────────────
+
+AUDIO_DIR  = "/tmp/pipeline_audio"   # временные аудиофайлы
+OUTPUT_DIR = "/tmp/pipeline_output"  # результаты
