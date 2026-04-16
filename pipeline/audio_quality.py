@@ -18,7 +18,9 @@ import numpy as np
 import torch
 import soundfile as sf
 import pyloudnorm as pyln
-from speechmos import dnsmos
+from torchmetrics.functional.audio.dnsmos import (
+    deep_noise_suppression_mean_opinion_score,
+)
 
 from config import (
     MOS_GOOD, MOS_BAD,
@@ -26,6 +28,7 @@ from config import (
     CLIPPING_THRESHOLD, CLIPPING_RATIO_CRITICAL,
     SNR_GOOD, SNR_OK,
     VAD_THRESHOLD, VAD_MIN_SPEECH_MS, VAD_MIN_SILENCE_MS, VAD_SPEECH_PAD_MS,
+    DEVICE
 )
 
 logger = logging.getLogger(__name__)
@@ -123,16 +126,24 @@ def compute_dnsmos(audio: np.ndarray, sr: int) -> dict:
     Источник: Reddy et al. ICASSP 2022, arXiv:2110.01763
     """
     logger.info("Считаем DNSMOS...")
-    result = dnsmos.run(audio, sr=sr)
+
+    audio_tensor = torch.from_numpy(audio).float().to(DEVICE)
+
+    result = deep_noise_suppression_mean_opinion_score(
+        audio_tensor,
+        fs=sr,
+        personalized=False,
+        device=DEVICE,
+    )
+    # result → tensor([p808_mos, sig_mos, bak_mos, ovrl_mos])
 
     scores = {
-        "ovrl_mos": round(float(result["ovrl_mos"]), 3),
-        "sig_mos":  round(float(result["sig_mos"]),  3),
-        "bak_mos":  round(float(result["bak_mos"]),  3),
+        "ovrl_mos": round(float(result[3]), 3),
+        "sig_mos":  round(float(result[1]), 3),
+        "bak_mos":  round(float(result[2]), 3),
     }
     logger.info(f"DNSMOS: {scores}")
     return scores
-
 
 def interpret_mos(ovrl_mos: float) -> str:
     if ovrl_mos >= MOS_GOOD:
