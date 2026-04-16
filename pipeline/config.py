@@ -12,7 +12,7 @@ else:
 
 # ─── Transcription ───────────────────────────────────────────────────────────
 
-WHISPER_MODEL = "large-v3-turbo" # large-v2?
+WHISPER_MODEL = "dropbox-dash/faster-whisper-large-v3-turbo" # large-v2?
 WHISPER_LANGUAGE = "ru"
 WHISPER_CONDITION_ON_PREV = False   # сохраняем filler words
 

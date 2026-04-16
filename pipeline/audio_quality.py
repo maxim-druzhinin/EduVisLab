@@ -118,6 +118,19 @@ def get_vad_segments(audio: np.ndarray, sr: int) -> list[VADSegment]:
 
 # ─── DNSMOS ───────────────────────────────────────────────────────────────────
 
+def _normalize_dnsmos_device(device):
+    if isinstance(device, str):
+        if device.startswith("cuda") and ":" not in device:
+            return device + ":0"
+        return device
+
+    if isinstance(device, torch.device):
+        if device.type == "cuda":
+            return f"cuda:{device.index if device.index is not None else 0}"
+        return "cpu"
+
+    return "cpu"
+
 def compute_dnsmos(audio: np.ndarray, sr: int) -> dict:
     """
     Оценка качества звука через DNSMOS P.835 (Microsoft).
@@ -133,7 +146,7 @@ def compute_dnsmos(audio: np.ndarray, sr: int) -> dict:
         audio_tensor,
         fs=sr,
         personalized=False,
-        device=DEVICE,
+        device=_normalize_dnsmos_device(DEVICE),
     )
     # result → tensor([p808_mos, sig_mos, bak_mos, ovrl_mos])
 
