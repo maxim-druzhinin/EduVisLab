@@ -88,7 +88,9 @@ def run(url: str) -> dict:
             },
             "clipping": {
                 "ratio":    aq.clipping_ratio,
-                "detected": aq.clipping_detected,
+                "crest_factor": aq.crest_factor,
+                "flattened_peaks_ratio": aq.flattened_peaks_ratio,
+                "level":    aq.clipping_level,   # "none" / "mild" / "severe"
             },
             "snr": {
                 "db":      aq.snr_db,
@@ -129,7 +131,7 @@ def main():
 
     # Вывод в stdout
     output_json = json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None)
-    print(output_json)
+    #print(output_json)
 
     # Сохранение в файл
     if args.output:

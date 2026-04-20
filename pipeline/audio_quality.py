@@ -25,7 +25,9 @@ from torchmetrics.functional.audio.dnsmos import (
 from config import (
     MOS_GOOD, MOS_BAD,
     LUFS_NORM_HIGH, LUFS_NORM_LOW, LUFS_TOO_QUIET, LUFS_TOO_LOUD,
-    CLIPPING_THRESHOLD, CLIPPING_RATIO_CRITICAL,
+    CLIPPING_THRESHOLD, CLIPPING_RATIO_MILD, CLIPPING_RATIO_SEVERE,
+    CREST_FACTOR_MILD, CREST_FACTOR_SEVERE,
+    FLAT_PEAKS_MILD, FLAT_PEAKS_SEVERE,
     SNR_GOOD, SNR_OK,
     VAD_THRESHOLD, VAD_MIN_SPEECH_MS, VAD_MIN_SILENCE_MS, VAD_SPEECH_PAD_MS,
     DEVICE
@@ -56,19 +58,21 @@ class AudioQualityResult:
     # LUFS
     lufs: float
 
-    # Клиппинг
-    clipping_ratio: float
-    clipping_detected: bool
+    # Клиппинг — три метрики + итоговый уровень
+    clipping_ratio: float          # прямой метод
+    crest_factor: float            # пик/RMS
+    flattened_peaks_ratio: float   # доля плато на пиках
+    clipping_level: str            # "none" / "mild" / "severe"
 
     # SNR
     snr_db: float
 
     # Интерпретации
-    mos_quality: str      # "good" / "ok" / "bad"
-    lufs_quality: str     # "normal" / "quiet" / "loud" / "too_quiet" / "too_loud"
-    snr_quality: str      # "good" / "ok" / "bad"
+    mos_quality: str
+    lufs_quality: str
+    snr_quality: str
 
-    # VAD сегменты — переиспользуются модулем Унылость
+    # VAD сегменты
     speech_segments: list[VADSegment]
 
 
@@ -195,15 +199,140 @@ def interpret_lufs(lufs: float) -> str:
 
 # ─── Clipping ─────────────────────────────────────────────────────────────────
 
-def compute_clipping(audio: np.ndarray) -> tuple[float, bool]:
+def compute_crest_factor(
+    audio: np.ndarray,
+    speech_segments: list[VADSegment],
+    sr: int,
+) -> float:
     """
-    Доля сэмплов с амплитудой > 0.99.
-    Клиппинг = перегруз микрофона → хруст и дисторшн.
+    Crest factor = peak / RMS по речевым сегментам.
+    Низкий → пики срезаны → следы клиппинга.
+    Считаем только по речи чтобы тишина не искажала результат.
     """
-    ratio = float(np.mean(np.abs(audio) > CLIPPING_THRESHOLD))
-    detected = ratio > CLIPPING_RATIO_CRITICAL
-    logger.info(f"Клиппинг: ratio={ratio:.6f}, detected={detected}")
-    return round(ratio, 6), detected
+    if not speech_segments:
+        return 0.0
+
+    speech_samples = np.concatenate([
+        audio[int(s.start * sr):int(s.end * sr)]
+        for s in speech_segments
+    ])
+
+    rms = np.sqrt(np.mean(speech_samples ** 2))
+    peak = np.max(np.abs(speech_samples))
+
+    if rms < 1e-10:
+        return 0.0
+
+    crest = float(peak / rms)
+    logger.info(f"Crest factor: {crest:.2f}")
+    return round(crest, 3)
+
+
+def compute_flattened_peaks(
+    audio: np.ndarray,
+    speech_segments: list[VADSegment],
+    sr: int,
+    amplitude_threshold: float = 0.3,
+    diff_threshold: float = 1e-5,
+) -> float:
+    """
+    Доля сэмплов где:
+      - амплитуда высокая (> amplitude_threshold)
+      - разница с соседним сэмплом почти нулевая (< diff_threshold)
+    Это прямой след срезания формы волны — работает даже
+    после нормализации YouTube.
+    """
+    if not speech_segments:
+        return 0.0
+
+    speech_samples = np.concatenate([
+        audio[int(s.start * sr):int(s.end * sr)]
+        for s in speech_segments
+    ])
+
+    if len(speech_samples) < 2:
+        return 0.0
+
+    diff = np.abs(np.diff(speech_samples))
+    # плато = высокая амплитуда И почти нулевой перепад
+    flat_mask = (diff < diff_threshold) & (np.abs(speech_samples[:-1]) > amplitude_threshold)
+    ratio = float(np.mean(flat_mask))
+
+    logger.info(f"Flattened peaks ratio: {ratio:.6f}")
+    return round(ratio, 6)
+
+
+def interpret_clipping(
+    clipping_ratio: float,
+    crest_factor: float,
+    flattened_peaks_ratio: float,
+) -> str:
+    """
+    Агрегация трёх метрик в один уровень.
+    Берём худший из трёх — принцип пессимистичной оценки.
+
+    none   → всё чисто
+    mild   → лёгкие следы, возможно периодический перегруз
+    severe → явный клиппинг, мешает восприятию
+    """
+    levels = []
+
+    # clipping_ratio
+    if clipping_ratio >= CLIPPING_RATIO_SEVERE:
+        levels.append("severe")
+    elif clipping_ratio >= CLIPPING_RATIO_MILD:
+        levels.append("mild")
+    else:
+        levels.append("none")
+
+    # crest_factor — инвертированная логика (низкий = хуже)
+    if crest_factor > 0 and crest_factor <= CREST_FACTOR_SEVERE:
+        levels.append("severe")
+    elif crest_factor > 0 and crest_factor <= CREST_FACTOR_MILD:
+        levels.append("mild")
+    else:
+        levels.append("none")
+
+    # flattened_peaks_ratio
+    if flattened_peaks_ratio >= FLAT_PEAKS_SEVERE:
+        levels.append("severe")
+    elif flattened_peaks_ratio >= FLAT_PEAKS_MILD:
+        levels.append("mild")
+    else:
+        levels.append("none")
+
+    # берём худший
+    if "severe" in levels:
+        return "severe"
+    elif "mild" in levels:
+        return "mild"
+    return "none"
+
+
+def compute_clipping(
+    audio: np.ndarray,
+    speech_segments: list[VADSegment],
+    sr: int,
+) -> tuple[float, float, float, str]:
+    """
+    Три метрики клиппинга + итоговый уровень.
+
+    Returns:
+        clipping_ratio        — прямой метод (амплитуда > 0.99)
+        crest_factor          — пик/RMS (низкий = срезанные пики)
+        flattened_peaks_ratio — доля плато на высокой амплитуде
+        clipping_level        — "none" / "mild" / "severe"
+    """
+    clipping_ratio = round(float(np.mean(np.abs(audio) > CLIPPING_THRESHOLD)), 6)
+    crest_factor = compute_crest_factor(audio, speech_segments, sr)
+    flattened_peaks_ratio = compute_flattened_peaks(audio, speech_segments, sr)
+    clipping_level = interpret_clipping(clipping_ratio, crest_factor, flattened_peaks_ratio)
+
+    logger.info(
+        f"Клиппинг: ratio={clipping_ratio}, crest={crest_factor}, "
+        f"flat={flattened_peaks_ratio}, level={clipping_level}"
+    )
+    return clipping_ratio, crest_factor, flattened_peaks_ratio, clipping_level
 
 
 # ─── SNR ──────────────────────────────────────────────────────────────────────
@@ -306,7 +435,7 @@ def run(wav_path: str) -> AudioQualityResult:
     lufs = compute_lufs(audio, sr)
 
     # 4. Клиппинг
-    clipping_ratio, clipping_detected = compute_clipping(audio)
+    clipping_ratio, crest_factor, flattened_peaks_ratio, clipping_level = compute_clipping(audio, speech_segments, sr)
 
     # 5. SNR
     snr_db = compute_snr(audio, sr, speech_segments)
@@ -317,7 +446,9 @@ def run(wav_path: str) -> AudioQualityResult:
         bak_mos=mos_scores["bak_mos"],
         lufs=lufs,
         clipping_ratio=clipping_ratio,
-        clipping_detected=clipping_detected,
+        crest_factor=crest_factor,
+        flattened_peaks_ratio=flattened_peaks_ratio,
+        clipping_level=clipping_level,
         snr_db=snr_db,
         mos_quality=interpret_mos(mos_scores["ovrl_mos"]),
         lufs_quality=interpret_lufs(lufs),
