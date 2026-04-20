@@ -21,6 +21,7 @@ from dataclasses import asdict
 from config import OUTPUT_DIR
 import transcription as transcription_module
 import audio_quality as audio_quality_module
+import dullness as dullness_module
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,10 @@ def run(url: str) -> dict:
     logger.info("── Модуль 2: Техническое качество ──")
     aq = audio_quality_module.run(tr.audio_path)
 
+    # ── Модуль 3: Флаг Унылость ────────────────────────────────────────────
+    logger.info("── Модуль 3: Флаг Унылость ──")
+    dl = dullness_module.run(tr, aq, tr.audio_path)
+
     # ── Сборка результата ──────────────────────────────────────────────────
     result = {
         "meta": {
@@ -99,8 +104,29 @@ def run(url: str) -> dict:
             # VAD сегменты для отладки и переиспользования в модуле Унылость
             "_vad_segments": vad_segments_to_dict(aq.speech_segments),
         },
-        # Флаг Унылость — следующий этап
-        "dullness": None,
+        "dullness": {
+            "flag":  dl.flag,
+            "score": dl.score,
+            "acoustic_score":   dl.acoustic_score,
+            "linguistic_score": dl.linguistic_score,
+            "components": {
+                # Акустика
+                "f0_mean":                dl.acoustic.f0_mean,
+                "f0_std":                 dl.acoustic.f0_std,
+                "hnr_log":                dl.acoustic.hnr_log,
+                "rms_std":                dl.acoustic.rms_std,
+                "spectral_flux_mean":     dl.acoustic.spectral_flux_mean,
+                "wpm":                    dl.acoustic.wpm,
+                "hesitation_pause_ratio": dl.acoustic.hesitation_pause_ratio,
+                # Лингвистика
+                "ttr_global":      dl.linguistic.ttr_global,
+                "ttr_local":       dl.linguistic.ttr_local,
+                "filler_ratio":    dl.linguistic.filler_ratio,
+                "question_ratio":  dl.linguistic.question_ratio,
+                "engagement_ratio":dl.linguistic.engagement_ratio,
+                "example_ratio":   dl.linguistic.example_ratio,
+            }
+        },
     }
 
     logger.info("═══ Пайплайн завершён ═══")
