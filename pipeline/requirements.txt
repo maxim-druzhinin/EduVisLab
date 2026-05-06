@@ -17,3 +17,8 @@ onnxruntime-gpu
 
 opensmile
 praat-parselmouth
+
+opencv-python
+piq
+mediapipe
+scenedetect
