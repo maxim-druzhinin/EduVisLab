@@ -157,9 +157,8 @@ def _serialize_video_quality(vq) -> dict:
             "level":   vq.resolution_level,
         },
         "dover": {
-            "technical": vq.dover_technical,
-            "aesthetic": vq.dover_aesthetic,
-            "quality":   vq.dover_quality,
+            "score":   vq.dover_score,
+            "quality": vq.dover_quality,
         },
         "brisque": {
             "median": vq.brisque_median,
