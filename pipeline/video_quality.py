@@ -45,7 +45,7 @@ from config import (
     FACE_SIZE_OK, FACE_SIZE_SMALL,
     BOARD_GLARE_PARTIAL, BOARD_GLARE_SEVERE,
     BOARD_CONTRAST_READABLE, BOARD_CONTRAST_MARGINAL,
-    FRAMES_DIR,
+    FRAMES_DIR, DEVICE
 )
 
 logger = logging.getLogger(__name__)
@@ -327,27 +327,30 @@ def interpret_dover(score: Optional[float]) -> str:
 # ─── Step 4: BRISQUE ──────────────────────────────────────────────────────────
 
 def compute_brisque_scores(frames: list[np.ndarray]) -> list[float]:
-    """
-    BRISQUE per-frame скоры через библиотеку piq.
-    Низкий = чистая картинка, высокий = артефакты/зерно.
-    """
     import torch
-    from piq import brisque  # type: ignore
+    from piq import brisque
 
     logger.info("Считаем BRISQUE...")
-    scores = []
 
+    BATCH_SIZE = 32
+    device = torch.device(DEVICE)
+
+    # Конвертируем все кадры: resize до 512px + на device
+    tensors = []
     for frame in frames:
-        # BGR → RGB, HWC → CHW, [0..255] → [0..1]
-        rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        tensor = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
-        tensor = tensor.unsqueeze(0)  # [1, 3, H, W]
+        rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (512, 512))
+        tensor  = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+        tensors.append(tensor)
 
+    scores = []
+    for i in range(0, len(tensors), BATCH_SIZE):
+        batch = torch.stack(tensors[i:i + BATCH_SIZE]).to(device)
         try:
-            score = float(brisque(tensor, data_range=1.0))
-            scores.append(score)
-        except Exception:
-            pass  # пропускаем проблемные кадры
+            batch_scores = brisque(batch, data_range=1.0, reduction='none')
+            scores.extend(batch_scores.cpu().tolist())
+        except Exception as e:
+            logger.warning(f"BRISQUE batch {i}: {e}")
 
     logger.info(f"BRISQUE: {len(scores)} кадров обработано")
     return scores
