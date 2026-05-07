@@ -171,6 +171,7 @@ def _serialize_video_quality(vq) -> dict:
         },
         "exposure": {
             "mean_brightness":    vq.mean_brightness,
+            "bright_background_ratio": vq.bright_background_ratio,
             "overexposed_ratio":  vq.overexposed_ratio,
             "underexposed_ratio": vq.underexposed_ratio,
             "level":              vq.exposure_level,

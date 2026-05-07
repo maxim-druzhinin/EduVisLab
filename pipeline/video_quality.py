@@ -79,6 +79,7 @@ class VideoQualityResult:
 
     # Освещение
     mean_brightness: float
+    bright_background_ratio: float
     overexposed_ratio: float
     underexposed_ratio: float
     exposure_level: str             # "normal" / "dark" / "overexposed" / "underexposed"
@@ -145,6 +146,9 @@ def download_video(url: str, output_dir: str = "/tmp/pipeline_video") -> str:
 
 # ─── Step 1: Adaptive frame extraction ───────────────────────────────────────
 
+def get_hwaccel_args() -> list:
+    return ["-hwaccel", "cuda"] if DEVICE == "cuda" else []
+
 def extract_quality_frames(video_path: str, fps: float = 0.1) -> list[np.ndarray]:
     """
     Извлекает кадры с низкой частотой (0.1 fps = 1 кадр / 10 сек).
@@ -156,6 +160,7 @@ def extract_quality_frames(video_path: str, fps: float = 0.1) -> list[np.ndarray
     pattern = os.path.join(frames_dir, "frame_%04d.jpg")
     cmd = [
         "ffmpeg", "-y",
+        *get_hwaccel_args(),  # пусто если CUDA нет
         "-i", video_path,
         "-vf", f"fps={fps}",
         "-q:v", "2",
@@ -242,14 +247,11 @@ def extract_motion_frames(
 # ─── Step 2: ffprobe metadata ─────────────────────────────────────────────────
 
 def get_video_metadata(video_path: str) -> dict:
-    """
-    Технические параметры видео напрямую из метаданных контейнера.
-    Без обработки кадров.
-    """
     cmd = [
         "ffprobe", "-v", "quiet",
         "-print_format", "json",
         "-show_streams",
+        "-show_format",  # ← добавили
         video_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -262,18 +264,22 @@ def get_video_metadata(video_path: str) -> dict:
     if not video_stream:
         raise RuntimeError("Видеопоток не найден в файле")
 
-    # avg_frame_rate приходит как строка "30/1" → eval даёт float
     fps_raw = video_stream.get("avg_frame_rate", "0/1")
     try:
         fps = eval(fps_raw)  # noqa: S307
     except Exception:
         fps = 0.0
 
+    # Stream битрейт часто занижен — берём format как fallback
+    stream_bitrate = int(video_stream.get("bit_rate") or 0)
+    format_bitrate = int(data["format"].get("bit_rate") or 0)
+    bitrate = format_bitrate if stream_bitrate < 1000 else stream_bitrate
+
     meta = {
         "width":        int(video_stream["width"]),
         "height":       int(video_stream["height"]),
         "fps":          round(float(fps), 2),
-        "bitrate_kbps": int(video_stream.get("bit_rate", 0)) // 1000,
+        "bitrate_kbps": bitrate // 1000,
         "codec":        video_stream.get("codec_name", "unknown"),
     }
 
@@ -390,13 +396,30 @@ def interpret_blur(p10: float) -> str:
 # ─── Step 6: Exposure ─────────────────────────────────────────────────────────
 
 def exposure_metrics(frame: np.ndarray) -> dict:
-    """Яркость, пересвет и недосвет по V-каналу HSV."""
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    v   = hsv[:, :, 2].astype(float) / 255.0
+    hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    v    = hsv[:, :, 2].astype(np.float32) / 255.0
+
+    bright_mask  = v > 0.95
+    bright_ratio = float(np.mean(bright_mask))
+    under_ratio  = float(np.mean(v < 0.05))
+
+    real_overexposed_ratio = 0.0
+    bright_edge_density    = 0.0
+
+    if bright_mask.sum() > 100:
+        lap   = cv2.Laplacian(gray, cv2.CV_64F)
+        edges = np.abs(lap) > 12.0
+        bright_edge_density = float(np.mean(edges[bright_mask]))
+        if bright_edge_density < 0.01:
+            real_overexposed_ratio = bright_ratio
+
     return {
-        "mean_brightness":    float(np.mean(v)),
-        "overexposed_ratio":  float(np.mean(v > 0.95)),
-        "underexposed_ratio": float(np.mean(v < 0.05)),
+        "mean_brightness":          float(np.mean(v)),
+        "bright_background_ratio":  bright_ratio,           # белый фон (доска/слайды)
+        "overexposed_ratio":        real_overexposed_ratio, # реальный пересвет
+        "bright_edge_density":      bright_edge_density,
+        "underexposed_ratio":       under_ratio,
     }
 
 
@@ -420,9 +443,9 @@ def compute_exposure(frames: list[np.ndarray]) -> dict:
 
 
 def interpret_exposure(mean_brightness: float, overexposed: float, underexposed: float) -> str:
-    if overexposed > OVEREXPOSED_RATIO_OK * 5:   # > 5%
+    if overexposed > OVEREXPOSED_RATIO_OK * 5:
         return "overexposed"
-    if underexposed > UNDEREXPOSED_RATIO_OK * 4:  # > 20%
+    if underexposed > UNDEREXPOSED_RATIO_OK * 4:
         return "underexposed"
     if mean_brightness < BRIGHTNESS_MIN:
         return "dark"
@@ -864,6 +887,7 @@ def run(video_path: str) -> VideoQualityResult:
 
         # Экспозиция
         mean_brightness=exposure["mean_brightness"],
+        bright_background_ratio=exposure["bright_background_ratio"],
         overexposed_ratio=exposure["overexposed_ratio"],
         underexposed_ratio=exposure["underexposed_ratio"],
         exposure_level=interpret_exposure(
