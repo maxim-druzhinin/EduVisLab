@@ -129,7 +129,7 @@ def download_video(url: str, output_dir: str = "/tmp/pipeline_video") -> str:
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--format", "bestvideo[ext=mp4]/bestvideo",
+        "--format", "bestvideo[vcodec^=avc1][ext=mp4]/bestvideo[ext=mp4]/bestvideo",
         "--output", output_template,
         "--print", "after_move:filepath",
         url,
