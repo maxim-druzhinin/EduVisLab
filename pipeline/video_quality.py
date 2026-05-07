@@ -64,8 +64,7 @@ class VideoQualityResult:
     resolution_level: str           # "high" / "normal" / "low" / "bad"
 
     # Перцептивное качество (DOVER)
-    dover_technical: Optional[float]   # 0..1, None если DOVER недоступен
-    dover_aesthetic: Optional[float]   # 0..1 — переиспользуется в Профиле подачи
+    dover_score: Optional[float]   # fused 0..1
     dover_quality: str                 # "good" / "ok" / "bad" / "unavailable"
 
     # Артефакты / зерно (BRISQUE)
@@ -130,7 +129,7 @@ def download_video(url: str, output_dir: str = "/tmp/pipeline_video") -> str:
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--format", "bestvideo[ext=mp4]/bestvideo",
         "--output", output_template,
         "--print", "after_move:filepath",
         url,
@@ -297,36 +296,21 @@ def interpret_resolution(height: int) -> str:
 
 # ─── Step 3: DOVER ────────────────────────────────────────────────────────────
 
-def compute_dover(video_path: str) -> tuple[Optional[float], Optional[float]]:
-    """
-    Перцептивное качество видео через DOVER.
-    Возвращает (technical_score, aesthetic_score) в диапазоне 0..1.
-    Возвращает (None, None) если DOVER не установлен.
-
-    Установка:
-        git clone https://github.com/VQAssessment/DOVER
-        cd DOVER && pip install -r requirements.txt && pip install -e .
-        python dover/download_weights.py
-    """
+def compute_dover(video_path: str) -> Optional[float]:
+    import subprocess
     try:
-        from dover import DOVER  # type: ignore
-
-        logger.info("Запускаем DOVER...")
-        evaluator = DOVER()
-        results   = evaluator.evaluate_a_video(video_path)
-
-        technical = round(float(results["technical"]), 4)
-        aesthetic = round(float(results["aesthetic"]), 4)
-
-        logger.info(f"DOVER: technical={technical}, aesthetic={aesthetic}")
-        return technical, aesthetic
-
-    except ImportError:
-        logger.warning("DOVER не установлен — пропускаем перцептивную оценку")
-        return None, None
+        result = subprocess.run(
+            ["python", "evaluate_one_video.py", "-v", video_path, "-f"],
+            cwd="/tmp/DOVER",
+            capture_output=True,
+            text=True,
+        )
+        fused = float(result.stdout.strip().splitlines()[-1])
+        logger.info(f"DOVER: {fused}")
+        return round(fused, 4)
     except Exception as e:
-        logger.warning(f"DOVER завершился с ошибкой: {e}")
-        return None, None
+        logger.warning(f"DOVER ошибка: {e}")
+        return None
 
 
 def interpret_dover(score: Optional[float]) -> str:
@@ -798,7 +782,7 @@ def run(video_path: str) -> VideoQualityResult:
         raise RuntimeError("Не удалось извлечь кадры из видео")
 
     # ── DOVER ─────────────────────────────────────────────────────────────
-    dover_technical, dover_aesthetic = compute_dover(video_path)
+    dover_score = compute_dover(video_path)
 
     # ── BRISQUE ───────────────────────────────────────────────────────────
     brisque_scores = compute_brisque_scores(quality_frames)
@@ -828,7 +812,7 @@ def run(video_path: str) -> VideoQualityResult:
     ]
     consistency = compute_temporal_consistency(
         blur_scores, brisque_scores,
-        [dover_technical] if dover_technical is not None else [],
+        [],  # dover_scores — больше не собираем покадрово
         brightness_scores,
     )
 
@@ -850,9 +834,8 @@ def run(video_path: str) -> VideoQualityResult:
         resolution_level=interpret_resolution(meta["height"]),
 
         # DOVER
-        dover_technical=dover_technical,
-        dover_aesthetic=dover_aesthetic,
-        dover_quality=interpret_dover(dover_technical),
+        dover_score=dover_score,
+        dover_quality=interpret_dover(dover_score),
 
         # BRISQUE
         brisque_median=brisque_median,

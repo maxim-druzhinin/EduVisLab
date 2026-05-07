@@ -8,8 +8,8 @@ RESOLUTION_LOW    = 480
 # < 480 → bad
 
 # DOVER (перцептивное качество, 0..1)
-DOVER_GOOD = 0.7
-DOVER_BAD  = 0.4
+DOVER_GOOD = 0.55
+DOVER_BAD  = 0.35
 
 # BRISQUE (артефакты/зерно, 0 = идеально, 100 = плохо)
 BRISQUE_GOOD = 20
