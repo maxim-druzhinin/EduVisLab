@@ -305,7 +305,8 @@ def compute_dover(video_path: str) -> Optional[float]:
             capture_output=True,
             text=True,
         )
-        fused = float(result.stdout.strip().splitlines()[-1])
+        line = result.stdout.strip().splitlines()[-1]
+        fused = float(line.split(":")[-1].strip())
         logger.info(f"DOVER: {fused}")
         return round(fused, 4)
     except Exception as e:
