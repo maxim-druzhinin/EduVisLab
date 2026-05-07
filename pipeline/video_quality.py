@@ -489,57 +489,67 @@ def interpret_flicker(mean: float) -> str:
 # ─── Step 9: Stability (vidstabdetect) ───────────────────────────────────────
 
 def compute_stability(video_path: str) -> dict:
-    """
-    Стабильность камеры через vidstabdetect (ffmpeg).
-    Оценивает глобальное движение камеры через feature matching.
-    Спикер который жестикулирует не влияет — его движение локальное.
+    import re
 
-    Возвращает нули если vid.stab не доступен в сборке ffmpeg.
-    Проверка: ffmpeg -filters | grep vidstab
-    """
-    logger.info("Считаем стабильность через vidstabdetect...")
+    probe = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", video_path],
+        capture_output=True, text=True,
+    )
+    duration = float(json.loads(probe.stdout)["format"]["duration"])
 
-    trf_path = os.path.join(tempfile.gettempdir(), "pipeline_transforms.trf")
+    margin = min(30, duration * 0.1)
+    windows = [
+        random.uniform(margin, duration - 10 - margin)
+        for _ in range(3)
+    ]
 
-    try:
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-vf", f"vidstabdetect=result={trf_path}:shakiness=10:accuracy=15",
-            "-f", "null", "-",
-        ]
-        subprocess.run(cmd, capture_output=True, check=True)
+    all_content = ""
 
-        translations = []
-        with open(trf_path, "r") as f:
-            for line in f:
-                if line.startswith("Frame") or line.startswith("#"):
-                    continue
-                parts = line.strip().split()
-                if len(parts) >= 5:
-                    try:
-                        dx = float(parts[1])
-                        dy = float(parts[2])
-                        translations.append((dx**2 + dy**2) ** 0.5)
-                    except ValueError:
-                        continue
+    for i, start in enumerate(windows):
+        trf_path = os.path.join(tempfile.gettempdir(), f"stability_{i}.trf")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-ss", str(start),
+                "-t", "10",
+                "-i", video_path,
+                "-vf", f"scale=640:-1,vidstabdetect=result={trf_path}:shakiness=5:accuracy=9",
+                "-f", "null", "-",
+            ], capture_output=True, check=True)
 
-        if not translations:
-            logger.warning("vidstabdetect: нет данных о смещениях")
-            return {"motion_mean": 0.0, "motion_std": 0.0}
+            with open(trf_path) as f:
+                all_content += f.read()
 
-        motion_mean = round(float(np.mean(translations)), 3)
-        motion_std  = round(float(np.std(translations)), 3)
+        except Exception as e:
+            logger.warning(f"Stability окно {i}: {e}")
 
-        logger.info(f"Стабильность: motion_mean={motion_mean:.3f}, std={motion_std:.3f}")
-        return {"motion_mean": motion_mean, "motion_std": motion_std}
-
-    except subprocess.CalledProcessError:
-        logger.warning(
-            "vidstabdetect недоступен — vid.stab не включён в сборку ffmpeg. "
-            "Проверьте: ffmpeg -filters | grep vidstab"
-        )
+    if not all_content:
         return {"motion_mean": 0.0, "motion_std": 0.0}
+
+    # Медиана по кадрам с фильтрацией по match score
+    # Формат LM: dx dy x y size contrast match
+    frame_medians = []
+    frames = re.findall(r'Frame\s+\d+.*?(?=Frame|\Z)', all_content, re.DOTALL)
+
+    for frame_content in frames:
+        lms = re.findall(
+            r'LM\s+(-?\d+)\s+(-?\d+)\s+\d+\s+\d+\s+\d+\s+[\d.]+\s+([\d.]+)',
+            frame_content
+        )
+        # match < 0.3 — хорошее совпадение блоков, не склейка
+        good = [(int(dx), int(dy)) for dx, dy, match in lms if float(match) < 0.3]
+        if good:
+            mags = [(dx**2 + dy**2)**0.5 for dx, dy in good]
+            frame_medians.append(float(np.median(mags)))
+
+    if not frame_medians:
+        return {"motion_mean": 0.0, "motion_std": 0.0}
+
+    motion_mean = round(float(np.mean(frame_medians)), 3)
+    motion_std  = round(float(np.std(frame_medians)), 3)
+
+    logger.info(f"Стабильность: motion_mean={motion_mean}, std={motion_std}")
+    return {"motion_mean": motion_mean, "motion_std": motion_std}
 
 
 def interpret_stability(motion_mean: float) -> str:

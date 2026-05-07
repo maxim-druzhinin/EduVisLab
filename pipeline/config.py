@@ -117,9 +117,10 @@ FLICKER_MILD   = 2
 FLICKER_SEVERE = 6
 
 # Стабильность — vidstabdetect (пиксели при 1080p)
-STABILITY_OK      = 0.5
-STABILITY_SHAKY   = 2.0
-STABILITY_VERY_SHAKY = 6.0
+# (640px, median по кадрам):
+STABILITY_OK        = 0.3
+STABILITY_SHAKY     = 1.0
+STABILITY_VERY_SHAKY = 3.0
 
 # Временная консистентность (relative std = std / mean)
 CONSISTENCY_MODERATE     = 0.15
