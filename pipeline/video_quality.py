@@ -614,39 +614,40 @@ def interpret_consistency(blur_rel_std: float) -> str:
 # ─── Step 11: Face visibility (MediaPipe) ────────────────────────────────────
 
 def compute_face_visibility(frames: list[np.ndarray]) -> dict:
-    """
-    Видимость спикера через MediaPipe Face Detection.
-    Возвращает долю кадров с лицом и медианный размер лица.
-    """
-    import mediapipe as mp  # type: ignore
+    import mediapipe as mp
 
     logger.info("Считаем видимость спикера (MediaPipe)...")
 
-    mp_face  = mp.solutions.face_detection
-    detector = mp_face.FaceDetection(min_detection_confidence=0.5)
+    BaseOptions     = mp.tasks.BaseOptions
+    FaceDetector    = mp.tasks.vision.FaceDetector
+    FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
+    VisionRunningMode   = mp.tasks.vision.RunningMode
+
+    options = FaceDetectorOptions(
+        base_options=BaseOptions(model_asset_path="/tmp/face_detector.tflite"),
+        running_mode=VisionRunningMode.IMAGE,
+    )
 
     face_sizes    = []
     frames_w_face = 0
 
-    for frame in frames:
-        rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = detector.process(rgb)
+    with FaceDetector.create_from_options(options) as detector:
+        for frame in frames:
+            rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result   = detector.detect(mp_image)
 
-        if results.detections:
-            frames_w_face += 1
-            bbox      = results.detections[0].location_data.relative_bounding_box
-            face_area = bbox.width * bbox.height
-            face_sizes.append(face_area)
-
-    detector.close()
+            if result.detections:
+                frames_w_face += 1
+                bbox = result.detections[0].bounding_box
+                h, w = frame.shape[:2]
+                face_area = (bbox.width * bbox.height) / (w * h)
+                face_sizes.append(face_area)
 
     face_presence_ratio = round(frames_w_face / len(frames), 3) if frames else 0.0
     face_size_median    = round(float(np.median(face_sizes)), 4) if face_sizes else 0.0
 
-    logger.info(
-        f"Спикер: presence={face_presence_ratio:.3f}, "
-        f"size_median={face_size_median:.4f}"
-    )
+    logger.info(f"Спикер: presence={face_presence_ratio:.3f}, size_median={face_size_median:.4f}")
     return {
         "face_presence_ratio": face_presence_ratio,
         "face_size_median":    face_size_median,

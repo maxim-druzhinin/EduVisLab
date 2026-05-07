@@ -20,5 +20,5 @@ praat-parselmouth
 
 opencv-python
 piq
-mediapipe==0.10.14
+mediapipe
 scenedetect
