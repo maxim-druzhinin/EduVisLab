@@ -55,6 +55,8 @@ def run(
     skip_dullness: bool = False,
     skip_video: bool = False,
 ) -> dict:
+    
+    started_at = datetime.now().isoformat()
 
     tr, aq, dl, vq = None, None, None, None
 
@@ -80,7 +82,7 @@ def run(
         "meta": {
             "video_url":       url,
             "processed_at":    started_at,
-            "duration_seconds": round(tr.duration_seconds, 1),
+            "duration_seconds": round(tr.duration_seconds, 1) if tr else None,
         },
         "transcription": {
             "language": tr.language,
