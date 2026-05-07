@@ -89,7 +89,7 @@ def run(
             "wpm":      tr.wpm,
             "text":     tr.text,
             "segments": segments_to_dict(tr.segments),
-        },
+        } if tr else None,
         "audio_quality": {
             "dnsmos": {
                 "ovrl_mos": aq.ovrl_mos,
@@ -112,7 +112,7 @@ def run(
                 "quality": aq.snr_quality,
             },
             "_vad_segments": vad_segments_to_dict(aq.speech_segments),
-        },
+        } if aq else None,
         "dullness": {
             "flag":  dl.flag,
             "score": dl.score,
@@ -133,7 +133,7 @@ def run(
                 "engagement_ratio":       dl.linguistic.engagement_ratio,
                 "example_ratio":          dl.linguistic.example_ratio,
             },
-        },
+        } if dl else None,
         "video_quality": _serialize_video_quality(vq),
     }
 
