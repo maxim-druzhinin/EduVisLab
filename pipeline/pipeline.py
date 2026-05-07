@@ -48,33 +48,30 @@ def vad_segments_to_dict(segments):
 
 # ─── Main pipeline ────────────────────────────────────────────────────────────
 
-def run(url: str, skip_video: bool = False) -> dict:
-    """
-    Запускает полный пайплайн для YouTube-ссылки.
-    Возвращает словарь с результатами всех модулей.
+def run(
+    url: str,
+    skip_transcription: bool = False,
+    skip_audio: bool = False,
+    skip_dullness: bool = False,
+    skip_video: bool = False,
+) -> dict:
 
-    skip_video=True — пропустить модуль качества видео (только аудио-модули).
-    Полезно при отладке или если нужна только транскрипция + Унылость.
-    """
-    started_at = datetime.now().isoformat()
-    logger.info(f"═══ Запуск пайплайна: {url} ═══")
+    tr, aq, dl, vq = None, None, None, None
 
-    # ── Модуль 1: Транскрипция ─────────────────────────────────────────────
-    logger.info("── Модуль 1: Транскрипция ──")
-    tr = transcription_module.run(url)
+    if not skip_transcription:
+        logger.info("── Модуль 1: Транскрипция ──")
+        tr = transcription_module.run(url)
 
-    # ── Модуль 2: Техническое качество звука ──────────────────────────────
-    logger.info("── Модуль 2: Техническое качество звука ──")
-    aq = audio_quality_module.run(tr.audio_path)
+    if not skip_audio:
+        logger.info("── Модуль 2: Качество звука ──")
+        aq = audio_quality_module.run(tr.audio_path)
 
-    # ── Модуль 3: Флаг Унылость ────────────────────────────────────────────
-    logger.info("── Модуль 3: Флаг Унылость ──")
-    dl = dullness_module.run(tr, aq, tr.audio_path)
+    if not skip_dullness:
+        logger.info("── Модуль 3: Унылость ──")
+        dl = dullness_module.run(tr, aq, tr.audio_path)
 
-    # ── Модуль 4: Техническое качество видео ──────────────────────────────
-    vq = None
     if not skip_video:
-        logger.info("── Модуль 4: Техническое качество видео ──")
+        logger.info("── Модуль 4: Качество видео ──")
         video_path = video_quality_module.download_video(url)
         vq = video_quality_module.run(video_path)
 
@@ -225,16 +222,22 @@ def main():
         help="Путь для сохранения JSON (опционально)"
     )
     parser.add_argument(
-        "--skip-video", action="store_true", default=False,
-        help="Пропустить модуль качества видео (только аудио-модули)"
-    )
-    parser.add_argument(
         "--pretty", action="store_true", default=True,
         help="Красивый JSON вывод (по умолчанию включён)"
     )
+    parser.add_argument("--skip-transcription", action="store_true", default=False)
+    parser.add_argument("--skip-audio",         action="store_true", default=False)
+    parser.add_argument("--skip-dullness",      action="store_true", default=False)
+    parser.add_argument("--skip-video",         action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run(args.url, skip_video=args.skip_video)
+    result = run(
+        args.url,
+        skip_transcription=args.skip_transcription,
+        skip_audio=args.skip_audio,
+        skip_dullness=args.skip_dullness,
+        skip_video=args.skip_video,
+    )
 
     output_json = json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None)
 
