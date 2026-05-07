@@ -618,11 +618,12 @@ def compute_face_visibility(frames: list[np.ndarray]) -> dict:
     Видимость спикера через MediaPipe Face Detection.
     Возвращает долю кадров с лицом и медианный размер лица.
     """
-    from mediapipe.python.solutions import face_detection
+    import mediapipe as mp  # type: ignore
 
     logger.info("Считаем видимость спикера (MediaPipe)...")
 
-    detector = face_detection.FaceDetection(min_detection_confidence=0.5)
+    mp_face  = mp.solutions.face_detection
+    detector = mp_face.FaceDetection(min_detection_confidence=0.5)
 
     face_sizes    = []
     frames_w_face = 0
