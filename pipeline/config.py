@@ -141,3 +141,29 @@ BOARD_CONTRAST_MARGINAL  = 0.06   # > marginal, иначе unreadable
 # Пути для видео
 VIDEO_DIR = "/tmp/pipeline_video"   # скачанные видеофайлы
 FRAMES_DIR = "/tmp/pipeline_frames" # извлечённые кадры
+
+
+
+import os
+ 
+# ─── Narrative module ─────────────────────────────────────────────────────────
+ 
+# DeepSeek API key (берётся из Colab Secrets или переменной окружения)
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+ 
+# LLM
+NARRATIVE_LLM_MODEL = "deepseek-v4-flash"
+ 
+# Эмбеддинговая модель для семантической сегментации
+# BAAI/bge-m3 — топ ruMTEB, mean pooling, без префикса
+# Альтернатива: ai-forever/FRIDA (нужен CLS pooling и префикс "paraphrase: ")
+NARRATIVE_EMBED_MODEL = "BAAI/bge-m3"
+ 
+# Препроцессинг: целевая длина чанка для эмбеддинга (секунды)
+NARRATIVE_LIGHT_MERGE_SEC = 50.0
+ 
+# Семантическая сегментация: минимальная длина тематического блока (секунды)
+NARRATIVE_MIN_SEGMENT_SEC = 90.0
+ 
+# Семантическая сегментация: нижние X% cosine similarity считаются границей темы
+NARRATIVE_BOUNDARY_PERCENTILE = 25.0

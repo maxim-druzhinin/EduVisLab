@@ -24,6 +24,7 @@ import transcription as transcription_module
 import audio_quality as audio_quality_module
 import dullness as dullness_module
 import video_quality as video_quality_module
+import narrative as narrative_module
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,8 @@ def run(
     skip_audio: bool = False,
     skip_dullness: bool = False,
     skip_video: bool = False,
+    skip_narrative: bool = False,
+    user_params: dict | None = None, 
 ) -> dict:
     
     started_at = datetime.now().isoformat()
@@ -63,6 +66,7 @@ def run(
     if not skip_transcription:
         logger.info("── Модуль 1: Транскрипция ──")
         tr = transcription_module.run(url)
+        metadata = transcription_module.fetch_metadata(url) if not skip_narrative else {}
 
     if not skip_audio:
         logger.info("── Модуль 2: Качество звука ──")
@@ -77,12 +81,26 @@ def run(
         video_path = video_quality_module.download_video(url)
         vq = video_quality_module.run(video_path)
 
+    nr = None
+    if not skip_narrative and tr is not None:
+        if user_params is None:
+            logger.warning("user_params не передан — нарратив пропущен")
+        else:
+            logger.info("── Модуль 5: Нарратив ──")
+            nr = narrative_module.run(
+                segments=[{"text": s.text, "start": s.start, "end": s.end}
+                           for s in tr.segments],
+                metadata=metadata,
+                user_params=user_params,
+            )
+
     # ── Сборка результата ──────────────────────────────────────────────────
     result = {
         "meta": {
-            "video_url":       url,
-            "processed_at":    started_at,
+            "video_url":        url,
+            "processed_at":     started_at,
             "duration_seconds": round(tr.duration_seconds, 1) if tr else None,
+            "youtube": metadata if metadata else None,
         },
         "transcription": {
             "language": tr.language,
@@ -135,6 +153,49 @@ def run(
             },
         } if dl else None,
         "video_quality": _serialize_video_quality(vq),
+
+        "narrative": {
+            "narrative":               nr.narrative,
+            "segments": [
+                {
+                    "title":       seg.title,
+                    "description": seg.description,
+                    "start":       round(seg.start, 1),
+                }
+                for seg in nr.segments
+            ],
+            "blooms_dominant":         nr.blooms_dominant,
+            "blooms_per_segment": [
+                {
+                    "segment": b.segment_title,
+                    "level":   b.level,
+                    "evidence": b.evidence,
+                }
+                for b in nr.blooms_per_segment
+            ],
+            "prerequisites": [
+                {"concept": p.concept, "confidence": p.confidence}
+                for p in nr.prerequisites
+            ],
+            "learning_path": {
+                "type":      nr.learning_path_type,
+                "reasoning": nr.learning_path_reasoning,
+            },
+            "topic_coverage": {
+                "covered": nr.topics_covered,
+                "gaps":    nr.topics_gaps,
+            },
+            "info_density":            nr.info_density,
+            "unique_approach":         nr.unique_approach,
+            "title_match": {
+                "verdict":     nr.title_match_verdict,
+                "explanation": nr.title_match_explanation,
+            },
+            "meta": {
+                "n_semantic_chunks": nr.n_semantic_chunks,
+                "n_segments":        nr.n_segments,
+            },
+        } if nr else {"skipped": True},
     }
 
     logger.info("═══ Пайплайн завершён ═══")

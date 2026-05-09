@@ -22,3 +22,6 @@ opencv-python
 piq
 mediapipe
 scenedetect
+
+openai
+sentence-transformers

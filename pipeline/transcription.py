@@ -10,6 +10,7 @@
 
 import os
 import subprocess
+import json
 import logging
 from pathlib import Path
 from dataclasses import dataclass
@@ -50,6 +51,36 @@ class TranscriptionResult:
     duration_seconds: float
     wpm: float
     audio_path: str   # путь к WAV файлу — переиспользуется другими модулями
+
+# ─── Fetch metadata ───────────────────────────────────────────────────
+
+def fetch_metadata(url: str) -> dict:
+    """
+    Получает метаданные YouTube видео через yt-dlp (без скачивания).
+    Вызывается один раз в pipeline.py и передаётся в narrative.run().
+    """
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--dump-json",
+        "--skip-download",
+        url,
+    ]
+ 
+    logger.info(f"Получаем метаданные: {url}")
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    info = json.loads(result.stdout)
+ 
+    return {
+        "title":          info.get("title", ""),
+        "description":    (info.get("description") or "")[:2000],
+        "channel":        info.get("channel") or info.get("uploader", ""),
+        "duration":       info.get("duration", 0),
+        "chapters":       info.get("chapters"),        # list или None
+        "playlist":       info.get("playlist"),
+        "playlist_index": info.get("playlist_index"),
+    }
+ 
 
 
 # ─── Step 1: Download audio ───────────────────────────────────────────────────
