@@ -307,7 +307,7 @@ def _run_segment_extraction(
         temperature=0.0,
         thinking=False,
         json_mode=True,
-        max_tokens=800,
+        max_tokens=2500,
     )
     return json.loads(raw)["segments"]
 
@@ -395,7 +395,10 @@ def _run_educational_analysis(
 
 _NARRATIVE_SYSTEM = (
     "Ты пишешь короткое описание образовательного видео для конкретного пользователя. "
-    "Живой язык, без формальностей. Только текст — никакого JSON, никаких заголовков."
+    "Тон: разговорный, честный, как умный знакомый который посмотрел и рассказывает. "
+    "Без канцелярщины и формальностей, но и без молодёжного сленга — "
+    "никаких 'шаришь', 'врубиться', 'реально', 'крутишь'. "
+    "Только текст — никакого JSON, никаких заголовков."
 )
 
 _PERSON_BY_LEVEL = {
@@ -458,7 +461,7 @@ def _build_narrative_prompt(
 - Название: {tm.get('verdict')} — {tm.get('explanation')}
 - Уникальность: {analysis.get('unique_approach') or 'не обнаружена'}
 
-Напиши 3–5 предложений — как будто объясняешь {_get_social_context(user_params)}.
+Напиши 2–3 предложения — ёмко и по делу, как объяснил бы {_get_social_context(user_params)}.
 Учитывай цель просмотра."""
 
 
@@ -474,7 +477,7 @@ def _run_narrative(
         temperature=0.7,
         thinking=False,
         json_mode=False,
-        max_tokens=500,
+        max_tokens=2500,
     ).strip()
 
 
