@@ -384,9 +384,9 @@ def _run_educational_analysis(
         system=_ANALYSIS_SYSTEM,
         user=_build_analysis_prompt(metadata, segments, semantic_chunks),
         temperature=0.0,
-        thinking=True,
+        thinking=False,
         json_mode=True,
-        max_tokens=1200,
+        max_tokens=2500,
     )
     return json.loads(raw)
 
