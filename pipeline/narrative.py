@@ -150,6 +150,7 @@ def _llm_call(
     temperature: float,
     model: str = NARRATIVE_LLM_MODEL,
     json_mode: bool = False,
+    thinking: bool = False,
     retries: int = 3,
 ) -> str:
     client = _get_llm_client()
@@ -161,7 +162,7 @@ def _llm_call(
             {"role": "user",   "content": user},
         ],
         "temperature": temperature,
-        "extra_body":  {"thinking": {"type": "disabled"}},
+        "extra_body": {"thinking": {"type": "enabled" if thinking else "disabled"}},
     }
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
