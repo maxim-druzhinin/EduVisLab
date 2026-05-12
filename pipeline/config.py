@@ -152,7 +152,13 @@ import os
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
  
 # LLM
-NARRATIVE_LLM_MODEL = "deepseek-v4-flash"
+NARRATIVE_LLM_MODEL          = "deepseek-v4-flash"   # для LLM #1 и #2
+NARRATIVE_LLM_MODEL_CREATIVE = "deepseek-v4-pro"     # для LLM #3
+SEGMENT_MODEL_BY_GOAL = {
+    "Закрыть точечные вопросы":     {"model": "deepseek-v4-flash", "thinking": False},
+    "Последовательно изучить тему": {"model": "deepseek-v4-pro", "thinking": False}, # тут мейби всё-таки обычную pro
+    "Составить общее представление": {"model": "deepseek-v4-pro",  "thinking": True},
+}
  
 # Эмбеддинговая модель для семантической сегментации
 # BAAI/bge-m3 — топ ruMTEB, mean pooling, без префикса

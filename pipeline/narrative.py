@@ -15,7 +15,7 @@ from typing import Optional
 
 from openai import OpenAI
 
-from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL, NARRATIVE_LIGHT_MERGE_SEC
+from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL, NARRATIVE_LIGHT_MERGE_SEC, NARRATIVE_LLM_MODEL_CREATIVE, SEGMENT_MODEL_BY_GOAL
 
 logger = logging.getLogger(__name__)
 
@@ -148,13 +148,14 @@ def _llm_call(
     system: str,
     user: str,
     temperature: float,
+    model: str = NARRATIVE_LLM_MODEL,
     json_mode: bool = False,
     retries: int = 3,
 ) -> str:
     client = _get_llm_client()
 
     kwargs: dict = {
-        "model":       NARRATIVE_LLM_MODEL,
+        "model":       model,
         "messages":    [
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
@@ -253,15 +254,28 @@ def _run_segment_extraction(
     chunks: list[dict],
     user_params: dict,
 ) -> list[dict]:
-    logger.info("LLM #1: segment extraction...")
+    cfg = SEGMENT_MODEL_BY_GOAL.get(
+        user_params.get("view_goal", ""),
+        {"model": NARRATIVE_LLM_MODEL, "thinking": False},
+    )
+    logger.info(f"LLM #1: segment extraction ({cfg['model']}, thinking={cfg['thinking']})...")
     raw = _llm_call(
         system=_SEGMENT_SYSTEM,
         user=_build_segment_prompt(metadata, chunks, user_params),
         temperature=0.0,
         json_mode=True,
+        model=cfg["model"],
+        thinking=cfg["thinking"],
+        #тут нормально справляется flash, с ризонингом она сходит с ума, pro без ризонинга наверное чуть лучше, она больше переформулирует, pro с ризонингом хорошо собирает "общее представление", прям оч крупными мазками, но время инференса просто космическое на длинной лекции
     )
     return json.loads(raw)["segments"]
 
+# Возожно в будущем сделать вот так: 
+# SEGMENT_MODEL_BY_GOAL = {
+#     "Закрыть точечные вопросы":      {"model": "deepseek-v4-flash", "thinking": False},
+#     "Последовательно изучить тему":  {"model": "deepseek-v4-flash", "thinking": False},
+#     "Составить общее представление":  {"model": "deepseek-v4-pro",   "thinking": True},
+# }
 
 # ─── LLM #2: Educational Analysis ────────────────────────────────────────────
 
@@ -345,6 +359,7 @@ def _run_educational_analysis(
         system=_ANALYSIS_SYSTEM,
         user=_build_analysis_prompt(metadata, segments, chunks, user_params),
         temperature=0.0,
+        model=NARRATIVE_LLM_MODEL_CREATIVE,   # Pro
         json_mode=True,
     )
     return json.loads(raw)
@@ -448,6 +463,8 @@ def _run_narrative(
         system=_NARRATIVE_SYSTEM,
         user=_build_narrative_prompt(user_params, segments, analysis),
         temperature=0.5,
+        thinking=True,
+        model=NARRATIVE_LLM_MODEL_CREATIVE,   # Pro
         json_mode=False,
     ).strip()
 
