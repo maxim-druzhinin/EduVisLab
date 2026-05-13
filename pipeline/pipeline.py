@@ -25,6 +25,7 @@ import audio_quality as audio_quality_module
 import dullness as dullness_module
 import video_quality as video_quality_module
 import narrative as narrative_module
+import delivery_profile as delivery_profile_module
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ def run(
     skip_dullness: bool = False,
     skip_video: bool = False,
     skip_narrative: bool = False,
+    skip_delivery_profile: bool = False,
     user_params: dict | None = None, 
 ) -> dict:
     
@@ -93,6 +95,15 @@ def run(
                 metadata=metadata,
                 user_params=user_params,
             )
+
+    dp = None
+    if not skip_delivery_profile and tr is not None and metadata and user_params:
+        logger.info("── Модуль: Профиль подачи ──")
+        dp = delivery_profile_module.run(
+            transcript_text=tr.text,   # строка прямо из TranscriptionResult
+            metadata=metadata,
+            user_params=user_params,
+        )
 
     # ── Сборка результата ──────────────────────────────────────────────────
     result = {
@@ -192,10 +203,23 @@ def run(
                 "explanation": nr.title_match_explanation,
             },
             "meta": {
-                "n_semantic_chunks": nr.n_semantic_chunks,
-                "n_segments":        nr.n_segments,
+                "n_chunks":   nr.n_chunks,
+                "n_segments": nr.n_segments,
             },
         } if nr else {"skipped": True},
+        
+        "delivery_profile": {
+            "academic_level":          dp.academic_level,
+            "academic_score":          dp.academic_score,
+            "instrumental_level":      dp.instrumental_level,
+            "instrumental_score":      dp.instrumental_score,
+            "bias":                    dp.bias,
+            "intensity":               dp.intensity,
+            "dominant":                dp.dominant,
+            "evidence_academic":       dp.evidence_academic,
+            "evidence_instrumental":   dp.evidence_instrumental,
+            "rationale":               dp.rationale,
+        } if dp else {"skipped": True},
     }
 
     logger.info("═══ Пайплайн завершён ═══")

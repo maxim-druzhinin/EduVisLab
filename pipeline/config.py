@@ -173,3 +173,6 @@ NARRATIVE_MIN_SEGMENT_SEC = 90.0
  
 # Семантическая сегментация: нижние X% cosine similarity считаются границей темы
 NARRATIVE_BOUNDARY_PERCENTILE = 25.0
+
+
+DELIVERY_PROFILE_MODEL = "deepseek-v4-pro"
