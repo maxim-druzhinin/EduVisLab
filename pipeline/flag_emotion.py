@@ -72,7 +72,7 @@ def _load_emotion_model(device: str):
 
     # Импортируем кастомный класс (файл должен быть в pipeline/)
     try:
-        from emotion_model_audeering import EmotionModel
+        from pipeline.emotion_model_audeering import EmotionModel
     except ImportError:
         raise ImportError(
             "Не найден emotion_model_audeering.py. "
