@@ -124,9 +124,15 @@ class VideoQualityResult:
 
 
 QWEN_BOARD_PROMPT = """
-Тебе показан кадр из образовательного видео. YOLOE уже детектировал 
-на этом кадре визуальный носитель контента — оцени насколько хорошо 
-видно то что на нём написано или показано.
+Тебе показан кадр из образовательного видео. Найди в кадре 
+визуальный носитель контента если он есть — классная доска 
+(зелёная или чёрная), маркерная доска, проекционный экран 
+со слайдами, флипчарт, монитор или планшет.
+
+Если носителя нет в кадре — верни все поля null.
+
+Если носитель есть — оцени насколько хорошо видно 
+то что на нём написано или показано.
 
 Носитель может быть любым: классная доска (зелёная или чёрная), 
 маркерная доска, проекционный экран со слайдами, флипчарт, 
@@ -476,18 +482,21 @@ def compute_exposure(frames: list[np.ndarray]) -> dict:
     logger.info("Считаем экспозицию...")
     all_metrics = [exposure_metrics(f) for f in frames]
 
-    mean_brightness    = float(np.median([m["mean_brightness"]    for m in all_metrics]))
-    overexposed_ratio  = float(np.median([m["overexposed_ratio"]  for m in all_metrics]))
-    underexposed_ratio = float(np.median([m["underexposed_ratio"] for m in all_metrics]))
+    mean_brightness        = float(np.median([m["mean_brightness"]        for m in all_metrics]))
+    bright_background_ratio = float(np.median([m["bright_background_ratio"] for m in all_metrics]))
+    overexposed_ratio      = float(np.median([m["overexposed_ratio"]      for m in all_metrics]))
+    underexposed_ratio     = float(np.median([m["underexposed_ratio"]     for m in all_metrics]))
 
     logger.info(
         f"Экспозиция: brightness={mean_brightness:.3f}, "
+        f"bright_bg={bright_background_ratio:.3f}, "
         f"over={overexposed_ratio:.4f}, under={underexposed_ratio:.4f}"
     )
     return {
-        "mean_brightness":    round(mean_brightness, 3),
-        "overexposed_ratio":  round(overexposed_ratio, 4),
-        "underexposed_ratio": round(underexposed_ratio, 4),
+        "mean_brightness":         round(mean_brightness, 3),
+        "bright_background_ratio": round(bright_background_ratio, 4),
+        "overexposed_ratio":       round(overexposed_ratio, 4),
+        "underexposed_ratio":      round(underexposed_ratio, 4),
     }
 
 
@@ -811,9 +820,8 @@ def compute_board_cv_metrics(
 
 def compute_board_readability_vlm(
     frames: list[np.ndarray],
-    masks: list[Optional[np.ndarray]],
 ) -> dict:
-    """VLM оценка читаемости через Qwen3-VL-Plus. Берём 5 кадров где есть доска."""
+    """VLM оценка читаемости через Qwen3-VL-Plus. Берём 5 равномерных кадров."""
     api_key = os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
         logger.warning("DASHSCOPE_API_KEY не задан — пропускаем VLM оценку доски")
@@ -829,26 +837,12 @@ def compute_board_readability_vlm(
         base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     )
 
-    valid = [(f, m) for f, m in zip(frames, masks) if m is not None]
-    if not valid:
-        return {
-            "board_readability_level": None,
-            "board_readability_score": None,
-            "board_surface_type":      None,
-            "board_main_issues":       None,
-        }
-
-    indices  = np.linspace(0, len(valid) - 1, min(5, len(valid)), dtype=int)
-    selected = [valid[i] for i in indices]
+    indices  = np.linspace(0, len(frames) - 1, min(5, len(frames)), dtype=int)
+    selected = [frames[i] for i in indices]
 
     results = []
-    for frame, mask in selected:
-        rows, cols = np.where(mask)
-        if len(rows) == 0:
-            continue
-        crop = frame[rows.min():rows.max(), cols.min():cols.max()]
-
-        _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    for frame in selected:
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
         img_b64 = base64.b64encode(buf).decode("utf-8")
 
         try:
@@ -882,8 +876,8 @@ def compute_board_readability_vlm(
             "board_main_issues":       None,
         }
 
-    levels   = [r["readability_level"] for r in results if "readability_level" in r]
-    scores   = [r["readability_score"]  for r in results if "readability_score"  in r]
+    levels   = [r["readability_level"] for r in results if r.get("readability_level")]
+    scores   = [r["readability_score"]  for r in results if r.get("readability_score")]
     issues   = [r["main_issue"] for r in results if r.get("main_issue")]
     surfaces = [r["surface_type"] for r in results if r.get("surface_type")]
 
@@ -955,7 +949,7 @@ def run(video_path: str) -> VideoQualityResult:
     # ── Читаемость доски ──────────────────────────────────────────────────
     board_masks = detect_board_masks(quality_frames)
     board_cv    = compute_board_cv_metrics(quality_frames, board_masks)
-    board_vlm   = compute_board_readability_vlm(quality_frames, board_masks)
+    board_vlm   = compute_board_readability_vlm(quality_frames)
 
     logger.info("── Качество видео готово ──")
 
