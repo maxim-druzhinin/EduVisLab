@@ -22,10 +22,16 @@ from dataclasses import asdict
 from config import OUTPUT_DIR
 import transcription as transcription_module
 import audio_quality as audio_quality_module
-import dullness as dullness_module
 import video_quality as video_quality_module
 import narrative as narrative_module
 import delivery_profile as delivery_profile_module
+
+import flag_logic as flag_logic_module
+import flag_intuitive as flag_intuitive_module
+import flag_emotion as flag_emotion_module
+import flag_sensor as flag_sensor_module
+
+from config import DEVICE
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +64,7 @@ def run(
     skip_video: bool = False,
     skip_narrative: bool = False,
     skip_delivery_profile: bool = False,
+    skip_jung_flags: bool = False,
     user_params: dict | None = None, 
 ) -> dict:
     
@@ -73,6 +80,12 @@ def run(
     if not skip_audio:
         logger.info("── Модуль 2: Качество звука ──")
         aq = audio_quality_module.run(tr.audio_path)
+        _aq_dict = {
+            "dnsmos":   {"ovrl_mos": aq.ovrl_mos, "sig_mos": aq.sig_mos, "bak_mos": aq.bak_mos},
+            "lufs":     {"value": aq.lufs},
+            "snr":      {"db": aq.snr_db},
+            "clipping": {"level": aq.clipping_level},
+        }
 
     if not skip_dullness:
         logger.info("── Модуль 3: Унылость ──")
@@ -82,6 +95,31 @@ def run(
         logger.info("── Модуль 4: Качество видео ──")
         video_path = video_quality_module.download_video(url)
         vq = video_quality_module.run(video_path)
+    
+
+    jf_logic = jf_intuit = jf_emotion = jf_sensor = None
+
+    if not skip_jung_flags and tr is not None:
+        logger.info("── Модуль: Флаги Юнга ──")
+
+        if aq is not None:
+            jf_logic = flag_logic_module.run(
+                audio_quality=_aq_dict,
+                transcript_text=tr.text,
+            )
+
+        jf_intuit = flag_intuitive_module.run(
+            transcript_text=tr.text,
+            transcript_segments=segments_to_dict(tr.segments),
+        )
+
+        jf_emotion = flag_emotion_module.run(
+            audio_path=tr.audio_path,
+            device=DEVICE,
+        )
+
+        if not skip_video and video_path:
+            jf_sensor = flag_sensor_module.run(video_path=video_path)
 
     nr = None
     if not skip_narrative and tr is not None:
@@ -100,7 +138,7 @@ def run(
     if not skip_delivery_profile and tr is not None and metadata and user_params:
         logger.info("── Модуль: Профиль подачи ──")
         dp = delivery_profile_module.run(
-            transcript_text=tr.text,   # строка прямо из TranscriptionResult
+            transcript_text=tr.text,
             metadata=metadata,
             user_params=user_params,
         )
@@ -220,6 +258,13 @@ def run(
             "evidence_instrumental":   dp.evidence_instrumental,
             "rationale":               dp.rationale,
         } if dp else {"skipped": True},
+
+        "jung_flags": {
+            "logic": jf_logic.to_dict()   if jf_logic   else {"skipped": True},
+            "intuitive": jf_intuit.to_dict() if jf_intuit else {"skipped": True},
+            "emotion": jf_emotion.to_dict()  if jf_emotion else {"skipped": True},
+            "sensor": jf_sensor.to_dict()    if jf_sensor  else {"skipped": True},
+        },
     }
 
     logger.info("═══ Пайплайн завершён ═══")
@@ -309,6 +354,7 @@ def main():
         "--output", default=None,
         help="Путь для сохранения JSON (опционально)"
     )
+    parser.add_argument("--skip-jung-flags", action="store_true", default=False)
     parser.add_argument(
         "--pretty", action="store_true", default=True,
         help="Красивый JSON вывод (по умолчанию включён)"
@@ -325,6 +371,7 @@ def main():
         skip_audio=args.skip_audio,
         skip_dullness=args.skip_dullness,
         skip_video=args.skip_video,
+        skip_jung_flags=args.skip_jung_flags,
     )
 
     output_json = json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None)
