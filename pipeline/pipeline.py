@@ -207,7 +207,7 @@ def run(
                 "score":  vq.score,
                 "issues": [{"code": i.code, "severity": i.severity, "message": i.message} for i in vq.issues],
                 "raw":    _serialize_video_quality(vq),
-            },
+            } if vq else {"skipped": True},
 
         "narrative": {
             "narrative":               nr.narrative,
