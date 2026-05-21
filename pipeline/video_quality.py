@@ -30,6 +30,9 @@ from typing import Optional
 import cv2
 import numpy as np
 
+import base64
+from openai import OpenAI
+
 from config import (
     RESOLUTION_HIGH, RESOLUTION_NORMAL, RESOLUTION_LOW,
     DOVER_GOOD, DOVER_BAD,
@@ -113,7 +116,53 @@ class VideoQualityResult:
     board_glare_ratio: Optional[float]
     board_contrast: Optional[float]
     board_glare_level: Optional[str]        # "ok" / "partial" / "severe"
-    board_readability_level: Optional[str]  # "readable" / "marginal" / "unreadable"
+    # VLM оценка
+    board_readability_level: Optional[int]    # 1-5, ← было str
+    board_readability_score: Optional[float]  # 0..1, ← новое
+    board_surface_type: Optional[str]         # ← новое
+    board_main_issues: Optional[list] 
+
+
+QWEN_BOARD_PROMPT = """
+Тебе показан кадр из образовательного видео. YOLOE уже детектировал 
+на этом кадре визуальный носитель контента — оцени насколько хорошо 
+видно то что на нём написано или показано.
+
+Носитель может быть любым: классная доска (зелёная или чёрная), 
+маркерная доска, проекционный экран со слайдами, флипчарт, 
+монитор или планшет в кадре. Подход к оценке одинаковый для всех.
+
+ЧТО ОЦЕНИВАЕМ — только физические условия восприятия:
+- равномерность и качество освещения области носителя
+- контраст между контентом и фоном
+- чёткость и размер контента относительно камеры
+- плотность контента
+
+ЧТО НЕ ОЦЕНИВАЕМ:
+- язык, алфавит, формулы — нас не интересует что написано/показано, 
+  только видно ли это физически
+- тип контента — рукопись, печатный текст и слайды оцениваются 
+  одинаково, не занижай оценку за нечеловеческий шрифт
+- временное перекрытие лектором — если лектор стоит перед доской, 
+  оценивай только видимую часть
+- качество почерка — кривой но контрастный почерк это уровень 4-5
+
+Шкала:
+1 — НЕЧИТАЕМО: засветка, глубокая тень или размытость уничтожают весь контент
+2 — СЛОЖНО ЧИТАТЬ: значительная часть контента теряется из-за освещения или контраста
+3 — ЧАСТИЧНО ЧИТАЕМО: общая картина понятна, детали теряются
+4 — ХОРОШО ЧИТАЕМО: контент воспринимается без затруднений, незначительные проблемы
+5 — ОТЛИЧНО ЧИТАЕМО: равномерное освещение, высокий контраст, всё чётко различимо
+
+Ответь строго в JSON без каких-либо пояснений вне JSON:
+{
+  "readability_level": 1-5,
+  "readability_score": 0.0-1.0,
+  "surface_type": "blackboard/whiteboard/screen/flipchart/tablet/monitor",
+  "main_issue": "главная проблема одним словом или null",
+  "evidence": "одно конкретное наблюдение из кадра"
+}
+"""
 
 
 # ─── Step 0: Download video ───────────────────────────────────────────────────
@@ -682,94 +731,69 @@ def compute_face_visibility(frames: list[np.ndarray]) -> dict:
 
 # ─── Step 12: Board readability ───────────────────────────────────────────────
 
-def detect_board_region(frame: np.ndarray) -> Optional[np.ndarray]:
+def detect_board_masks(frames: list[np.ndarray]) -> list[Optional[np.ndarray]]:
     """
-    Ищет наибольший прямоугольный контур — доску или экран.
-    Возвращает бинарную маску или None если не найден.
+    Детектирует область доски/экрана через YOLOE-26x-seg.
+    Возвращает список масок (None если доска не найдена на кадре).
     """
-    gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    edges   = cv2.Canny(blurred, 50, 150)
+    from ultralytics import YOLOE
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
+    logger.info("Детектируем доску через YOLOE...")
+    model = YOLOE("yoloe-26x-seg.pt")
+    model.set_classes(
+        ["whiteboard", "blackboard", "chalkboard",
+         "projection screen", "flipchart", "monitor", "tablet"]
+    )
 
-    frame_area = frame.shape[0] * frame.shape[1]
-    best_mask  = None
-    best_area  = 0
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < frame_area * 0.05 or area > frame_area * 0.90:
-            continue
-
-        peri   = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-
-        if len(approx) == 4 and area > best_area:
-            best_area = area
-            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            cv2.fillPoly(mask, [approx], 1)
-            best_mask = mask.astype(bool)
-
-    return best_mask
-
-
-def compute_board_metrics(frames: list[np.ndarray]) -> dict:
-    """
-    Читаемость доски / экрана.
-    Берём медиану по всем quality-кадрам где регион был найден.
-
-    Два сигнала:
-      glare_ratio — засветка (окно бьёт в доску)
-      board_contrast — локальный контраст (есть ли контент)
-
-    Интерпретация пары:
-      glare высокий + contrast низкий  → окно бьёт в доску
-      glare низкий  + contrast низкий  → доска пустая или бледная
-      glare низкий  + contrast высокий → всё хорошо
-    """
-    logger.info("Анализируем читаемость доски/экрана...")
-
-    glare_scores    = []
-    contrast_scores = []
-    detected_count  = 0
-
+    masks = []
     for frame in frames:
-        mask = detect_board_region(frame)
+        results = model.predict(frame, verbose=False)
+        if results[0].masks is not None and len(results[0].masks) > 0:
+            mask = results[0].masks.data[0].cpu().numpy().astype(bool)
+            # Ресайзим маску до размера кадра если нужно
+            if mask.shape != frame.shape[:2]:
+                mask = cv2.resize(
+                    mask.astype(np.uint8),
+                    (frame.shape[1], frame.shape[0])
+                ).astype(bool)
+            masks.append(mask)
+        else:
+            masks.append(None)
+
+    detected = sum(1 for m in masks if m is not None)
+    logger.info(f"Доска найдена на {detected}/{len(frames)} кадрах")
+    return masks
+
+
+def compute_board_cv_metrics(
+    frames: list[np.ndarray],
+    masks: list[Optional[np.ndarray]],
+) -> dict:
+    """CV метрики по области доски: засветка и локальный контраст."""
+    glare_scores = []
+    contrast_scores = []
+
+    for frame, mask in zip(frames, masks):
         if mask is None:
             continue
-
-        detected_count += 1
-
-        # Засветка
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         v   = hsv[:, :, 2].astype(float) / 255.0
-        glare = float(np.mean(v[mask] > 0.92))
-        glare_scores.append(glare)
+        glare_scores.append(float(np.mean(v[mask] > 0.92)))
 
-        # Локальный контраст
-        gray   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(float) / 255.0
-        contrast = float(np.std(gray[mask]))
-        contrast_scores.append(contrast)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(float) / 255.0
+        contrast_scores.append(float(np.std(gray[mask])))
 
-    board_detected = detected_count > 0
-
-    if not board_detected:
-        logger.info("Доска/экран не обнаружены (скринкаст или кадр без явной доски)")
+    if not glare_scores:
         return {
-            "board_detected":         False,
-            "board_glare_ratio":      None,
-            "board_contrast":         None,
-            "board_glare_level":      None,
-            "board_readability_level": None,
+            "board_detected": False,
+            "board_glare_ratio": None,
+            "board_contrast": None,
+            "board_glare_level": None,
         }
 
     glare_median    = round(float(np.median(glare_scores)), 4)
     contrast_median = round(float(np.median(contrast_scores)), 4)
 
-    # Засветка
     if glare_median >= BOARD_GLARE_SEVERE:
         glare_level = "severe"
     elif glare_median >= BOARD_GLARE_PARTIAL:
@@ -777,26 +801,97 @@ def compute_board_metrics(frames: list[np.ndarray]) -> dict:
     else:
         glare_level = "ok"
 
-    # Читаемость
-    if contrast_median >= BOARD_CONTRAST_READABLE:
-        readability = "readable"
-    elif contrast_median >= BOARD_CONTRAST_MARGINAL:
-        readability = "marginal"
-    else:
-        readability = "unreadable"
+    return {
+        "board_detected":    True,
+        "board_glare_ratio": glare_median,
+        "board_contrast":    contrast_median,
+        "board_glare_level": glare_level,
+    }
 
-    logger.info(
-        f"Доска: detected={detected_count}/{len(frames)} кадров, "
-        f"glare={glare_median:.4f} ({glare_level}), "
-        f"contrast={contrast_median:.4f} ({readability})"
+
+def compute_board_readability_vlm(
+    frames: list[np.ndarray],
+    masks: list[Optional[np.ndarray]],
+) -> dict:
+    """VLM оценка читаемости через Qwen3-VL-Plus. Берём 5 кадров где есть доска."""
+    api_key = os.environ.get("DASHSCOPE_API_KEY")
+    if not api_key:
+        logger.warning("DASHSCOPE_API_KEY не задан — пропускаем VLM оценку доски")
+        return {
+            "board_readability_level": None,
+            "board_readability_score": None,
+            "board_surface_type":      None,
+            "board_main_issues":       None,
+        }
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     )
 
+    valid = [(f, m) for f, m in zip(frames, masks) if m is not None]
+    if not valid:
+        return {
+            "board_readability_level": None,
+            "board_readability_score": None,
+            "board_surface_type":      None,
+            "board_main_issues":       None,
+        }
+
+    indices  = np.linspace(0, len(valid) - 1, min(5, len(valid)), dtype=int)
+    selected = [valid[i] for i in indices]
+
+    results = []
+    for frame, mask in selected:
+        rows, cols = np.where(mask)
+        if len(rows) == 0:
+            continue
+        crop = frame[rows.min():rows.max(), cols.min():cols.max()]
+
+        _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        img_b64 = base64.b64encode(buf).decode("utf-8")
+
+        try:
+            response = client.chat.completions.create(
+                model="qwen3-vl-plus",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                        {"type": "text", "text": QWEN_BOARD_PROMPT},
+                    ],
+                }],
+                max_tokens=200,
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = raw[raw.find("{"):raw.rfind("}") + 1]
+            parsed = json.loads(raw)
+            results.append(parsed)
+            logger.info(f"Qwen board: level={parsed.get('readability_level')} "
+                       f"surface={parsed.get('surface_type')} "
+                       f"issue={parsed.get('main_issue')}")
+        except Exception as e:
+            logger.warning(f"Qwen board API error: {e}")
+
+    if not results:
+        return {
+            "board_readability_level": None,
+            "board_readability_score": None,
+            "board_surface_type":      None,
+            "board_main_issues":       None,
+        }
+
+    levels   = [r["readability_level"] for r in results if "readability_level" in r]
+    scores   = [r["readability_score"]  for r in results if "readability_score"  in r]
+    issues   = [r["main_issue"] for r in results if r.get("main_issue")]
+    surfaces = [r["surface_type"] for r in results if r.get("surface_type")]
+
     return {
-        "board_detected":         True,
-        "board_glare_ratio":      glare_median,
-        "board_contrast":         contrast_median,
-        "board_glare_level":      glare_level,
-        "board_readability_level": readability,
+        "board_readability_level": int(np.median(levels)) if levels else None,
+        "board_readability_score": round(float(np.mean(scores)), 3) if scores else None,
+        "board_surface_type":      max(set(surfaces), key=surfaces.count) if surfaces else None,
+        "board_main_issues":       list(set(issues)) if issues else None,
     }
 
 
@@ -858,7 +953,9 @@ def run(video_path: str) -> VideoQualityResult:
     face = compute_face_visibility(quality_frames)
 
     # ── Читаемость доски ──────────────────────────────────────────────────
-    board = compute_board_metrics(quality_frames)
+    board_masks = detect_board_masks(quality_frames)
+    board_cv    = compute_board_cv_metrics(quality_frames, board_masks)
+    board_vlm   = compute_board_readability_vlm(quality_frames, board_masks)
 
     logger.info("── Качество видео готово ──")
 
@@ -921,9 +1018,12 @@ def run(video_path: str) -> VideoQualityResult:
         face_size_median=face["face_size_median"],
 
         # Доска
-        board_detected=board["board_detected"],
-        board_glare_ratio=board["board_glare_ratio"],
-        board_contrast=board["board_contrast"],
-        board_glare_level=board["board_glare_level"],
-        board_readability_level=board["board_readability_level"],
+        board_detected=board_cv["board_detected"],
+        board_glare_ratio=board_cv["board_glare_ratio"],
+        board_contrast=board_cv["board_contrast"],
+        board_glare_level=board_cv["board_glare_level"],
+        board_readability_level=board_vlm["board_readability_level"],
+        board_readability_score=board_vlm["board_readability_score"],
+        board_surface_type=board_vlm["board_surface_type"],
+        board_main_issues=board_vlm["board_main_issues"],
     )

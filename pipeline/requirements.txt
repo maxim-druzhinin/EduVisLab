@@ -27,3 +27,4 @@ openai
 sentence-transformers
 
 easyocr
+ultralytics

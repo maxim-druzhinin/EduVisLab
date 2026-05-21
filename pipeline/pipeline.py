@@ -331,11 +331,14 @@ def _serialize_video_quality(vq) -> dict:
             "face_size_median":    vq.face_size_median,
         },
         "board": {
-            "detected":         vq.board_detected,
-            "glare_ratio":      vq.board_glare_ratio,
-            "contrast":         vq.board_contrast,
-            "glare_level":      vq.board_glare_level,
-            "readability_level": vq.board_readability_level,
+            "detected":           vq.board_detected,
+            "glare_ratio":        vq.board_glare_ratio,
+            "contrast":           vq.board_contrast,
+            "glare_level":        vq.board_glare_level,
+            "readability_level":  vq.board_readability_level,
+            "readability_score":  vq.board_readability_score,
+            "surface_type":       vq.board_surface_type,
+            "main_issues":        vq.board_main_issues,
         },
     }
 
