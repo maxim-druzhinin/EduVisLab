@@ -120,8 +120,141 @@ class VideoQualityResult:
     board_readability_level: Optional[int]    # 1-5, ← было str
     board_readability_score: Optional[float]  # 0..1, ← новое
     board_surface_type: Optional[str]         # ← новое
-    board_main_issues: Optional[list] 
+    board_main_issues: Optional[list]
 
+    issues: list
+    score: float
+
+
+@dataclass
+class VideoQualityIssue:
+    code: str
+    severity: str  # "critical" / "warning"
+    message: str
+
+
+def extract_issues(vq: "VideoQualityResult") -> list[VideoQualityIssue]:
+    issues = []
+
+    # ── Critical ──────────────────────────────────────────────────
+    if vq.blur_level == "blurry":
+        issues.append(VideoQualityIssue(
+            code="blur",
+            severity="critical",
+            message="Размытое изображение — сложно разглядеть детали",
+        ))
+
+    if vq.board_readability_level and vq.board_readability_level <= 2:
+        issues.append(VideoQualityIssue(
+            code="board_unreadable",
+            severity="critical",
+            message="Доска практически нечитаема",
+        ))
+
+    if vq.stability_level == "very_shaky":
+        issues.append(VideoQualityIssue(
+            code="camera_shake",
+            severity="critical",
+            message="Сильное дрожание камеры",
+        ))
+
+    if vq.resolution_level == "bad":
+        issues.append(VideoQualityIssue(
+            code="low_resolution",
+            severity="critical",
+            message="Очень низкое разрешение видео",
+        ))
+
+    # ── Warning ───────────────────────────────────────────────────
+    if vq.board_readability_level == 3:
+        detail = f" ({vq.board_main_issues[0]})" if vq.board_main_issues else ""
+        issues.append(VideoQualityIssue(
+            code="board_poor",
+            severity="warning",
+            message=f"Доска читается с трудом{detail}",
+        ))
+
+    if vq.exposure_level in ("overexposed", "dark", "underexposed"):
+        msg = {
+            "overexposed":  "Засветка в кадре",
+            "dark":         "Слишком тёмное изображение",
+            "underexposed": "Слишком тёмное изображение",
+        }[vq.exposure_level]
+        issues.append(VideoQualityIssue(
+            code="exposure",
+            severity="warning",
+            message=msg,
+        ))
+
+    if vq.flicker_level == "severe":
+        issues.append(VideoQualityIssue(
+            code="flicker",
+            severity="warning",
+            message="Мерцание изображения",
+        ))
+    elif vq.flicker_level == "mild":
+        issues.append(VideoQualityIssue(
+            code="flicker",
+            severity="warning",
+            message="Лёгкое мерцание изображения",
+        ))
+
+    if vq.stability_level == "shaky":
+        issues.append(VideoQualityIssue(
+            code="camera_shake",
+            severity="warning",
+            message="Заметное дрожание камеры",
+        ))
+
+    if vq.blur_std and vq.blur_std > 1000:
+        issues.append(VideoQualityIssue(
+            code="visual_interference",
+            severity="warning",
+            message="Визуальные помехи или артефакты в кадре",
+        ))
+
+    if vq.resolution_level == "low":
+        issues.append(VideoQualityIssue(
+            code="low_resolution",
+            severity="warning",
+            message="Низкое разрешение видео (480p)",
+        ))
+
+    priority = {"critical": 0, "warning": 1}
+    return sorted(issues, key=lambda x: priority[x.severity])
+
+def aggregate_video_quality(vq: "VideoQualityResult") -> float:
+    import math
+    
+    def sigmoid(x):
+        return 1 / (1 + math.exp(-10 * (x - 0.4)))
+
+    # База
+    base = sigmoid(vq.dover_score or 0.4) * 10
+
+    # Штрафы
+    blur_p10 = vq.blur_p10 or 50
+    if blur_p10 >= 60:   blur_mult = 1.00
+    elif blur_p10 >= 20: blur_mult = 0.90
+    else:                blur_mult = 0.75
+
+    flicker_mult = {"none": 1.0, "mild": 0.95, "severe": 0.80}.get(vq.flicker_level, 1.0)
+    stab_mult    = {"stable": 1.0, "ok": 1.0, "shaky": 0.90, "very_shaky": 0.75}.get(vq.stability_level, 1.0)
+    std_mult     = 0.90 if (vq.blur_std or 0) > 1000 else 1.0
+
+    total_mult = max(0.60, blur_mult * flicker_mult * stab_mult * std_mult)
+    penalized  = base * total_mult
+
+    # Бонус за доску
+    board_delta = {5: 1.5, 4: 0.5, 3: 0.0, 2: -0.5, 1: -1.0}.get(vq.board_readability_level or 0, 0.0)
+
+    # Потолки
+    ceiling = 10.0
+    if vq.blur_level == "blurry":        ceiling = min(ceiling, 5.5)
+    if vq.flicker_level == "severe":     ceiling = min(ceiling, 7.0)
+    if vq.stability_level == "very_shaky": ceiling = min(ceiling, 6.0)
+
+    return round(max(0.5, min(ceiling, penalized + board_delta)), 1)
 
 QWEN_BOARD_PROMPT = """
 Тебе показан кадр из образовательного видео. Найди в кадре 
@@ -953,7 +1086,7 @@ def run(video_path: str) -> VideoQualityResult:
 
     logger.info("── Качество видео готово ──")
 
-    return VideoQualityResult(
+    vq_result = VideoQualityResult(
         # Технические параметры
         width=meta["width"],
         height=meta["height"],
@@ -1020,4 +1153,10 @@ def run(video_path: str) -> VideoQualityResult:
         board_readability_score=board_vlm["board_readability_score"],
         board_surface_type=board_vlm["board_surface_type"],
         board_main_issues=board_vlm["board_main_issues"],
+
+        issues=[],
+        score=0.0,
     )
+    vq_result.score  = aggregate_video_quality(vq_result)
+    vq_result.issues = extract_issues(vq_result)
+    return vq_result

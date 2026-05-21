@@ -98,8 +98,8 @@ BRISQUE_GOOD = 20
 BRISQUE_BAD  = 50
 
 # Blur — дисперсия Лапласиана (при 1080p)
-BLUR_SHARP  = 100   # > sharp
-BLUR_SOFT   = 50    # > soft, иначе blurry
+BLUR_SHARP  = 60   # > sharp
+BLUR_SOFT   = 20    # > soft, иначе blurry
 
 # Экспозиция (V-канал HSV, 0..1)
 BRIGHTNESS_MIN        = 0.15   # ниже → темно

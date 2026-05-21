@@ -88,9 +88,9 @@ def run(
             "clipping": {"level": aq.clipping_level},
         }
 
-    if not skip_dullness:
-        logger.info("── Модуль 3: Унылость ──")
-        dl = dullness_module.run(tr, aq, tr.audio_path)
+    # if not skip_dullness:
+    #     logger.info("── Модуль 3: Унылость ──")
+    #     dl = dullness_module.run(tr, aq, tr.audio_path)
 
     if not skip_video:
         logger.info("── Модуль 4: Качество видео ──")
@@ -202,7 +202,12 @@ def run(
                 "example_ratio":          dl.linguistic.example_ratio,
             },
         } if dl else None,
-        "video_quality": _serialize_video_quality(vq),
+
+        "video_quality": {
+                "score":  vq.score,
+                "issues": [{"code": i.code, "severity": i.severity, "message": i.message} for i in vq.issues],
+                "raw":    _serialize_video_quality(vq),
+            },
 
         "narrative": {
             "narrative":               nr.narrative,
