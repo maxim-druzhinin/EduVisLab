@@ -71,6 +71,7 @@ def run(
     started_at = datetime.now().isoformat()
 
     tr, aq, dl, vq = None, None, None, None
+    metadata = None
 
     if not skip_transcription:
         logger.info("── Модуль 1: Транскрипция ──")
