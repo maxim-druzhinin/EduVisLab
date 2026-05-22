@@ -33,6 +33,25 @@ import flag_sensor as flag_sensor_module
 
 from config import DEVICE
 
+def aggregate_technical_quality(
+    audio_score: float | None,
+    video_score: float | None,
+) -> float | None:
+    """
+    Гармоническое среднее аудио и видео скоров.
+    Автоматически штрафует когда одна из составляющих сильно проседает.
+    Если один модуль пропущен — возвращает только доступный скор.
+    """
+    if audio_score is None and video_score is None:
+        return None
+    if audio_score is None:
+        return video_score
+    if video_score is None:
+        return audio_score
+
+    harmonic = 2 * audio_score * video_score / (audio_score + video_score)
+    return round(harmonic, 1)
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -144,6 +163,9 @@ def run(
             user_params=user_params,
         )
 
+    audio_score = aq.score if aq else None
+    video_score = vq.score if vq else None
+
     # ── Сборка результата ──────────────────────────────────────────────────
     result = {
         "meta": {
@@ -152,35 +174,37 @@ def run(
             "duration_seconds": round(tr.duration_seconds, 1) if tr else None,
             "youtube": metadata if metadata else None,
         },
+
+        "technical_quality": {
+            "score":       aggregate_technical_quality(audio_score, video_score),
+            "audio_score": audio_score,
+            "video_score": video_score,
+        },
+
         "transcription": {
             "language": tr.language,
             "wpm":      tr.wpm,
             "text":     tr.text,
             "segments": segments_to_dict(tr.segments),
         } if tr else None,
+
         "audio_quality": {
+            "score":  aq.score,
+            "issues": [{"code": i.code, "severity": i.severity, "message": i.message}
+                    for i in aq.issues],
             "dnsmos": {
                 "ovrl_mos": aq.ovrl_mos,
                 "sig_mos":  aq.sig_mos,
                 "bak_mos":  aq.bak_mos,
                 "quality":  aq.mos_quality,
             },
-            "lufs": {
-                "value":   aq.lufs,
-                "quality": aq.lufs_quality,
-            },
-            "clipping": {
-                "ratio":                 aq.clipping_ratio,
-                "crest_factor":          aq.crest_factor,
-                "flattened_peaks_ratio": aq.flattened_peaks_ratio,
-                "level":                 aq.clipping_level,
-            },
-            "snr": {
-                "db":      aq.snr_db,
-                "quality": aq.snr_quality,
-            },
-            "_vad_segments": vad_segments_to_dict(aq.speech_segments),
+            "lufs":     {"value": aq.lufs, "quality": aq.lufs_quality},
+            "clipping": {"ratio": aq.clipping_ratio, "crest_factor": aq.crest_factor,
+                        "flattened_peaks_ratio": aq.flattened_peaks_ratio,
+                        "level": aq.clipping_level},
+            "snr":      {"db": aq.snr_db, "quality": aq.snr_quality},
         } if aq else None,
+
         "dullness": {
             "flag":  dl.flag,
             "score": dl.score,

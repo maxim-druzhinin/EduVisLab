@@ -72,8 +72,111 @@ class AudioQualityResult:
     lufs_quality: str
     snr_quality: str
 
+    score: float
+    issues: list
+
     # VAD сегменты
     speech_segments: list[VADSegment]
+
+
+import math
+
+def aggregate_audio_quality(aq: "AudioQualityResult") -> float:
+
+    def sigmoid(x, center=2.8, steepness=3):
+        return 1 / (1 + math.exp(-steepness * (x - center)))
+
+    # Взвешенный DNSMOS
+    dnsmos = 0.50 * aq.ovrl_mos + 0.35 * aq.sig_mos + 0.15 * aq.bak_mos
+    base   = sigmoid(dnsmos) * 10
+
+    # Клиппинг
+    clip_mult    = {"none": 1.0, "mild": 0.88, "severe": 0.50}.get(aq.clipping_level, 1.0)
+    clip_ceiling = 4.0 if aq.clipping_level == "severe" else 10.0
+
+    # SNR
+    snr = aq.snr_db or 0
+    if snr >= 20:   snr_mult, snr_ceiling = 1.0,  10.0
+    elif snr >= 15: snr_mult, snr_ceiling = 0.95, 10.0
+    elif snr >= 10: snr_mult, snr_ceiling = 0.85, 10.0
+    elif snr >= 5:  snr_mult, snr_ceiling = 0.70,  5.5
+    else:           snr_mult, snr_ceiling = 0.50,  4.0
+
+    # LUFS
+    lufs = aq.lufs or -23
+    if lufs < -28:   lufs_mult = 0.93
+    elif lufs > -12: lufs_mult = 0.90
+    else:            lufs_mult = 1.0
+
+    total_mult = max(0.60, clip_mult * snr_mult * lufs_mult)
+    ceiling    = min(clip_ceiling, snr_ceiling)
+
+    return round(max(0.5, min(ceiling, base * total_mult)), 1)
+
+
+@dataclass
+class AudioQualityIssue:
+    code: str
+    severity: str
+    message: str
+
+
+def extract_audio_issues(aq: "AudioQualityResult") -> list[AudioQualityIssue]:
+    issues = []
+
+    # Critical
+    if aq.clipping_level == "severe":
+        issues.append(AudioQualityIssue(
+            code="clipping",
+            severity="critical",
+            message="Сильный перегруз — искажение звука",
+        ))
+
+    if (aq.snr_db or 0) < 5:
+        issues.append(AudioQualityIssue(
+            code="noise",
+            severity="critical",
+            message="Очень сильный фоновый шум или эхо",
+        ))
+
+    if aq.mos_quality == "bad":
+        issues.append(AudioQualityIssue(
+            code="poor_quality",
+            severity="critical",
+            message="Низкое общее качество звука",
+        ))
+
+    # Warning
+    if aq.clipping_level == "mild":
+        issues.append(AudioQualityIssue(
+            code="clipping",
+            severity="warning",
+            message="Небольшой перегруз звука",
+        ))
+
+    if 5 <= (aq.snr_db or 0) < 10:
+        issues.append(AudioQualityIssue(
+            code="noise",
+            severity="warning",
+            message="Заметный фоновый шум",
+        ))
+
+    if aq.lufs_quality == "quiet":
+        issues.append(AudioQualityIssue(
+            code="volume",
+            severity="warning",
+            message="Слишком тихая запись",
+        ))
+
+    if aq.lufs_quality == "loud":
+        issues.append(AudioQualityIssue(
+            code="volume",
+            severity="warning",
+            message="Слишком громкая запись",
+        ))
+
+    priority = {"critical": 0, "warning": 1}
+    return sorted(issues, key=lambda x: priority[x.severity])
 
 
 # ─── silero-VAD ───────────────────────────────────────────────────────────────
@@ -440,7 +543,7 @@ def run(wav_path: str) -> AudioQualityResult:
     # 5. SNR
     snr_db = compute_snr(audio, sr, speech_segments)
 
-    return AudioQualityResult(
+    aq_result = AudioQualityResult(
         ovrl_mos=mos_scores["ovrl_mos"],
         sig_mos=mos_scores["sig_mos"],
         bak_mos=mos_scores["bak_mos"],
@@ -454,4 +557,8 @@ def run(wav_path: str) -> AudioQualityResult:
         lufs_quality=interpret_lufs(lufs),
         snr_quality=interpret_snr(snr_db),
         speech_segments=speech_segments,
+        score=0.0, issues=[],
     )
+    aq_result.score  = aggregate_audio_quality(aq_result)
+    aq_result.issues = extract_audio_issues(aq_result)
+    return aq_result
