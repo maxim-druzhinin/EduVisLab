@@ -72,12 +72,13 @@ def _load_emotion_model(device: str):
 
     # Импортируем кастомный класс (файл должен быть в pipeline/)
     try:
-        from pipeline.emotion_model_audeering import EmotionModel
-    except ImportError:
+        from emotion_model_audeering import EmotionModel
+    except ImportError as e:
         raise ImportError(
-            "Не найден emotion_model_audeering.py. "
-            "Убедитесь что файл лежит в папке pipeline/."
-        )
+            f"Не удалось импортировать EmotionModel: {e}. "
+            "Убедитесь что emotion_model_audeering.py лежит в pipeline/ "
+            "и установлены все зависимости (transformers)."
+        ) from e
 
     model_id = "audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"
     processor = Wav2Vec2Processor.from_pretrained(model_id)
@@ -179,24 +180,42 @@ def _run_arousal(audio_path: str, device: str = "cpu") -> EmotionArousalResult:
 
 def _run_pose(frame_paths: list[str], face_size_median: float = 0.1) -> EmotionPoseResult:
     """
-    Трекаем центроид плеч лектора по кадрам.
+    Трекаем центроид плеч лектора по кадрам (новый MediaPipe Tasks API).
     Возвращает velocity_mean и position_range.
     """
     if not frame_paths:
         return EmotionPoseResult(available=False, error="no_frames")
 
-    # Крупный план — Pose не поможет
     if face_size_median > 0.15:
         return EmotionPoseResult(available=False, error="tight_shot_face_size_too_large")
 
     try:
         import mediapipe as mp
         import cv2
+        import urllib.request
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision as mp_vision
     except ImportError:
         return EmotionPoseResult(available=False, error="mediapipe_not_installed")
 
-    mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+    model_path = "/tmp/pose_landmarker_lite.task"
+    if not os.path.exists(model_path):
+        logger.info("Скачиваем pose_landmarker_lite.task...")
+        urllib.request.urlretrieve(
+            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+            "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+            model_path,
+        )
+
+    try:
+        base_options = mp_python.BaseOptions(model_asset_path=model_path)
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_vision.RunningMode.IMAGE,
+        )
+        landmarker = mp_vision.PoseLandmarker.create_from_options(options)
+    except Exception as e:
+        return EmotionPoseResult(available=False, error=f"landmarker_init_failed: {e}")
 
     centroids = []
 
@@ -205,19 +224,18 @@ def _run_pose(frame_paths: list[str], face_size_median: float = 0.1) -> EmotionP
         if img is None:
             continue
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect(mp_img)
+
         if not result.pose_landmarks:
             continue
 
-        lm = result.pose_landmarks.landmark
-        left_shoulder  = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
-        right_shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-
-        cx = (left_shoulder.x + right_shoulder.x) / 2
-        cy = (left_shoulder.y + right_shoulder.y) / 2
+        lms = result.pose_landmarks[0]  # первый человек в кадре
+        cx = (lms[11].x + lms[12].x) / 2  # LEFT_SHOULDER=11, RIGHT_SHOULDER=12
+        cy = (lms[11].y + lms[12].y) / 2
         centroids.append((cx, cy))
 
-    pose.close()
+    landmarker.close()
 
     if len(centroids) < 2:
         return EmotionPoseResult(available=False, error="insufficient_detections")

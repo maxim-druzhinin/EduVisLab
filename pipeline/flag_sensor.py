@@ -283,20 +283,24 @@ def _compute_jerk_score(
     br_a = np.mean(cv2.cvtColor(frame_after,  cv2.COLOR_BGR2GRAY))
     scores.append(min(abs(br_a - br_b) / 100.0, 1.0))
 
-    # 3. Pose jump — смещение лектора в кадре
+    # 3. Pose jump — смещение лектора в кадре (новый Tasks API)
     if pose is not None:
         try:
             import mediapipe as mp
-            lm_idx = mp.solutions.pose.PoseLandmark
 
-            res_b = pose.process(cv2.cvtColor(frame_before, cv2.COLOR_BGR2RGB))
-            res_a = pose.process(cv2.cvtColor(frame_after,  cv2.COLOR_BGR2RGB))
+            def _get_cx(frame_bgr):
+                rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                res = pose.detect(mp_img)
+                if res.pose_landmarks:
+                    lms = res.pose_landmarks[0]
+                    return (lms[11].x + lms[12].x) / 2  # LEFT=11, RIGHT=12
+                return None
 
-            if res_b.pose_landmarks and res_a.pose_landmarks:
-                cx_b = (res_b.pose_landmarks.landmark[lm_idx.LEFT_SHOULDER].x +
-                        res_b.pose_landmarks.landmark[lm_idx.RIGHT_SHOULDER].x) / 2
-                cx_a = (res_a.pose_landmarks.landmark[lm_idx.LEFT_SHOULDER].x +
-                        res_a.pose_landmarks.landmark[lm_idx.RIGHT_SHOULDER].x) / 2
+            cx_b = _get_cx(frame_before)
+            cx_a = _get_cx(frame_after)
+
+            if cx_b is not None and cx_a is not None:
                 # нормируем: прыжок на 30% ширины кадра = score 1.0
                 scores.append(min(abs(cx_a - cx_b) / 0.3, 1.0))
         except Exception:
@@ -329,16 +333,32 @@ def _run_cuts(video_path: str) -> SensorCutResult:
     # Jerk score на склейках
     jerk_scores = []
 
-    # Инициализируем MediaPipe Pose один раз для всех склеек
+    # Инициализируем MediaPipe Pose один раз для всех склеек (новый Tasks API)
     pose = None
     try:
         import mediapipe as mp
-        pose = mp.solutions.pose.Pose(
-            static_image_mode=True,
-            min_detection_confidence=0.5,
+        import urllib.request
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision as mp_vision
+
+        model_path = "/tmp/pose_landmarker_lite.task"
+        if not os.path.exists(model_path):
+            logger.info("Скачиваем pose_landmarker_lite.task...")
+            urllib.request.urlretrieve(
+                "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+                "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+                model_path,
+            )
+        base_options = mp_python.BaseOptions(model_asset_path=model_path)
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_vision.RunningMode.IMAGE,
         )
+        pose = mp_vision.PoseLandmarker.create_from_options(options)
     except ImportError:
         logger.warning("mediapipe не установлен — pose_jump не считается")
+    except Exception as e:
+        logger.warning(f"Не удалось инициализировать PoseLandmarker: {e}")
 
     for i in range(len(scene_list) - 1):
         cut_frame_idx = int(scene_list[i][1].get_frames())

@@ -610,9 +610,11 @@ def render_html_block(html_content: str, height: int = 240, width: int | None = 
 def render_bipolar_watch_widget(
     value: int,
     title: str = "Профиль подачи",
-    left_label: str = "Инструментальность",
-    right_label: str = "Академичность",
+    left_label: str = "Инструмент",
+    right_label: str = "Академия",
     size: int = 280,
+    academic_score: float = 0.5,       # 0..1 из delivery_profile.py
+    instrumental_score: float = 0.5,   # 0..1 из delivery_profile.py
 ):
     value = max(-100, min(100, value))
     normalized = (value + 100) / 200
@@ -623,48 +625,50 @@ def render_bipolar_watch_widget(
 
     value_text = str(abs(value))
 
-    def hex_to_rgb(h: str):
+    def hex_to_rgb(h):
         h = h.lstrip("#")
         return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
     def rgb_to_hex(rgb):
         return "#{:02x}{:02x}{:02x}".format(*rgb)
 
-    def lerp(a, b, t: float):
+    def lerp(a, b, t):
         return int(round(a + (b - a) * t))
 
-    def blend(c1: str, c2: str, t: float):
+    def blend(c1, c2, t):
         r1, g1, b1 = hex_to_rgb(c1)
         r2, g2, b2 = hex_to_rgb(c2)
-        return rgb_to_hex((
-            lerp(r1, r2, t),
-            lerp(g1, g2, t),
-            lerp(b1, b2, t),
-        ))
+        return rgb_to_hex((lerp(r1, r2, t), lerp(g1, g2, t), lerp(b1, b2, t)))
 
     t = normalized
     if t <= 0.18:
         marker_fill = blend("#ea580c", "#f59e0b", t / 0.18)
     elif t <= 0.36:
-        marker_fill = blend("#f59e0b", "#fbbf24", (t - 0.18) / (0.36 - 0.18))
+        marker_fill = blend("#f59e0b", "#fbbf24", (t - 0.18) / 0.18)
     elif t <= 0.46:
-        marker_fill = blend("#fbbf24", "#fde68a", (t - 0.36) / (0.46 - 0.36))
+        marker_fill = blend("#fbbf24", "#fde68a", (t - 0.36) / 0.10)
     elif t <= 0.50:
-        marker_fill = blend("#fde68a", "#f8fafc", (t - 0.46) / (0.50 - 0.46))
+        marker_fill = blend("#fde68a", "#f8fafc", (t - 0.46) / 0.04)
     elif t <= 0.54:
-        marker_fill = blend("#f8fafc", "#ddd6fe", (t - 0.50) / (0.54 - 0.50))
+        marker_fill = blend("#f8fafc", "#ddd6fe", (t - 0.50) / 0.04)
     elif t <= 0.64:
-        marker_fill = blend("#ddd6fe", "#c4b5fd", (t - 0.54) / (0.64 - 0.54))
+        marker_fill = blend("#ddd6fe", "#c4b5fd", (t - 0.54) / 0.10)
     elif t <= 0.82:
-        marker_fill = blend("#c4b5fd", "#8b5cf6", (t - 0.64) / (0.82 - 0.64))
+        marker_fill = blend("#c4b5fd", "#8b5cf6", (t - 0.64) / 0.18)
     else:
-        marker_fill = blend("#8b5cf6", "#6d28d9", (t - 0.82) / (1.00 - 0.82))
+        marker_fill = blend("#8b5cf6", "#6d28d9", (t - 0.82) / 0.18)
 
-    description = (
-        "Заглушка описания метрики. Здесь будет пояснение, что означает профиль подачи, "
-        "как интерпретировать текущее положение на шкале и почему значение смещено в сторону "
-        "более инструментальной или более академической подачи."
-    )
+    # ── Scatter plot: координаты точки ─────────────────────────────────────
+    # Область графика: x [32..188], y [40..188]
+    PLOT_X0, PLOT_X1 = 32, 188
+    PLOT_Y0, PLOT_Y1 = 40, 188
+    PLOT_W = PLOT_X1 - PLOT_X0   # 156
+    PLOT_H = PLOT_Y1 - PLOT_Y0   # 148
+    PLOT_MID_X = PLOT_X0 + PLOT_W / 2  # 110
+    PLOT_MID_Y = PLOT_Y0 + PLOT_H / 2  # 114
+
+    dot_x = PLOT_X0 + instrumental_score * PLOT_W
+    dot_y = PLOT_Y1 - academic_score * PLOT_H  # Y инвертирован в SVG
 
     html_block = f"""
     <!DOCTYPE html>
@@ -682,161 +686,79 @@ def render_bipolar_watch_widget(
             font-family: {FONT_STACK};
             overflow: visible;
         }}
-
-        .metric-toggle {{
-            display: none;
-        }}
-
+        .metric-toggle {{ display: none; }}
         .metric-card {{
             position: relative;
             width: {size}px;
             height: {size}px;
             cursor: pointer;
         }}
-
         .metric-face {{
             position: absolute;
             inset: 0;
             transition: opacity 0.22s ease, transform 0.22s ease;
         }}
-
-        .metric-front {{
-            opacity: 1;
-            transform: scale(1);
-        }}
-
-        .metric-back {{
-            opacity: 0;
-            transform: scale(0.97);
-            box-sizing: border-box;
-            padding: 0;
-        }}
-
+        .metric-front {{ opacity: 1; transform: scale(1); }}
+        .metric-back  {{ opacity: 0; transform: scale(0.97); }}
         .metric-toggle:checked + .metric-card .metric-front {{
-            opacity: 0;
-            transform: scale(0.97);
-            pointer-events: none;
+            opacity: 0; transform: scale(0.97); pointer-events: none;
         }}
-
         .metric-toggle:checked + .metric-card .metric-back {{
-            opacity: 1;
-            transform: scale(1);
+            opacity: 1; transform: scale(1);
         }}
-
-        .metric-back-shell {{
-            width: 100%;
-            height: 100%;
-            border-radius: 30px;
-            background: {SURFACE_BG};
-            border: 1px solid rgba(59, 130, 246, 0.18);
-            box-sizing: border-box;
-            padding: 22px 18px 18px 18px;
-            box-shadow:
-                0 0 0 1px rgba(59, 130, 246, 0.12),
-                0 12px 12px rgba(0, 0, 0, 0.28),
-                0 0 12px rgba(59, 130, 246, 0.08),
-                0 0 22px rgba(139, 92, 246, 0.05);
-        }}
-
-        .metric-back-title {{
-            color: {TEXT_MAIN};
-            font-size: 1rem;
-            font-weight: 700;
-            line-height: 1.2;
-            margin-bottom: 12px;
-        }}
-
-        .metric-back-desc {{
-            color: {TEXT_MUTED};
-            font-size: 0.92rem;
-            line-height: 1.45;
-        }}
-
-        svg {{
-            overflow: visible;
-            display: block;
-        }}
-
-        svg text {{
-            font-family: {FONT_STACK};
-        }}
+        svg {{ overflow: visible; display: block; }}
+        svg text {{ font-family: {FONT_STACK}; }}
     </style>
     </head>
     <body>
         <input type="checkbox" id="{widget_id}" class="metric-toggle">
         <label for="{widget_id}" class="metric-card">
+
+            <!-- ── FRONT: спидометр ── -->
             <div class="metric-face metric-front">
                 <svg width="{size}" height="{size}" viewBox="-12 -12 244 244" xmlns="http://www.w3.org/2000/svg">
                     <defs>
                         <linearGradient id="{grad_id}" x1="0%" y1="0%" x2="100%" y2="0%">
-                            <stop offset="0%" stop-color="#ea580c"/>
-                            <stop offset="18%" stop-color="#f59e0b"/>
-                            <stop offset="36%" stop-color="#fbbf24"/>
-                            <stop offset="46%" stop-color="#fde68a"/>
-                            <stop offset="50%" stop-color="#f8fafc"/>
-                            <stop offset="54%" stop-color="#ddd6fe"/>
-                            <stop offset="64%" stop-color="#c4b5fd"/>
-                            <stop offset="82%" stop-color="#8b5cf6"/>
+                            <stop offset="0%"   stop-color="#ea580c"/>
+                            <stop offset="18%"  stop-color="#f59e0b"/>
+                            <stop offset="36%"  stop-color="#fbbf24"/>
+                            <stop offset="46%"  stop-color="#fde68a"/>
+                            <stop offset="50%"  stop-color="#f8fafc"/>
+                            <stop offset="54%"  stop-color="#ddd6fe"/>
+                            <stop offset="64%"  stop-color="#c4b5fd"/>
+                            <stop offset="82%"  stop-color="#8b5cf6"/>
                             <stop offset="100%" stop-color="#6d28d9"/>
                         </linearGradient>
-
-                        <filter id="cardGlow" x="-16%" y="-16%" width="132%" height="132%" filterUnits="objectBoundingBox">
-                            <feDropShadow dx="0" dy="0" stdDeviation="0.3" flood-color="rgba(59, 130, 246, 0.12)"/>
-                            <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="rgba(0, 0, 0, 0.28)"/>
-                            <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="rgba(59, 130, 246, 0.08)"/>
-                            <feDropShadow dx="0" dy="0" stdDeviation="22" flood-color="rgba(139, 92, 246, 0.05)"/>
+                        <filter id="cardGlow" x="-16%" y="-16%" width="132%" height="132%">
+                            <feDropShadow dx="0" dy="0"  stdDeviation="0.3" flood-color="rgba(59,130,246,0.12)"/>
+                            <feDropShadow dx="0" dy="12" stdDeviation="12"  flood-color="rgba(0,0,0,0.28)"/>
+                            <feDropShadow dx="0" dy="0"  stdDeviation="12"  flood-color="rgba(59,130,246,0.08)"/>
+                            <feDropShadow dx="0" dy="0"  stdDeviation="22"  flood-color="rgba(139,92,246,0.05)"/>
                         </filter>
                     </defs>
 
-                    <rect 
-                        x="0" 
-                        y="0" 
-                        width="220" 
-                        height="220" 
-                        rx="30" 
-                        fill="{SURFACE_BG}" 
-                        stroke="rgba(59, 130, 246, 0.18)"
-                        stroke-width="1"
-                        filter="url(#cardGlow)"
-                    />
+                    <rect x="0" y="0" width="220" height="220" rx="30"
+                          fill="{SURFACE_BG}" stroke="rgba(59,130,246,0.18)" stroke-width="1"
+                          filter="url(#cardGlow)"/>
 
                     <text x="110" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="{TEXT_MAIN}">
                         {html.escape(title)}
                     </text>
 
-                    <path
-                        d="M 55 150 A 60 60 0 1 1 165 150"
-                        fill="none"
-                        stroke="{TRACK_BG}"
-                        stroke-width="18"
-                        stroke-linecap="round"
-                    />
+                    <path d="M 55 150 A 60 60 0 1 1 165 150"
+                          fill="none" stroke="{TRACK_BG}" stroke-width="18" stroke-linecap="round"/>
+                    <path id="activeArc_{widget_id}" d="M 55 150 A 60 60 0 1 1 165 150"
+                          fill="none" stroke="url(#{grad_id})" stroke-width="18"
+                          stroke-linecap="round" pathLength="100"/>
 
-                    <path
-                        id="activeArc"
-                        d="M 55 150 A 60 60 0 1 1 165 150"
-                        fill="none"
-                        stroke="url(#{grad_id})"
-                        stroke-width="18"
-                        stroke-linecap="round"
-                        pathLength="100"
-                    />
-
-                    <circle
-                        id="marker"
-                        cx="55"
-                        cy="150"
-                        r="8.8"
-                        fill="{marker_fill}"
-                        stroke="{SURFACE_BG}"
-                        stroke-width="3"
-                    />
+                    <circle id="marker_{widget_id}" cx="55" cy="150" r="8.8"
+                            fill="{marker_fill}" stroke="{SURFACE_BG}" stroke-width="3"/>
 
                     <text x="110" y="126" text-anchor="middle" font-size="36" font-weight="800" fill="{marker_fill}">
                         {value_text}
                     </text>
 
-                    <text x="20" y="188" text-anchor="start" font-size="9" font-weight="700" fill="#f59e0b">
+                    <text x="20"  y="188" text-anchor="start" font-size="9" font-weight="700" fill="#f59e0b">
                         {html.escape(left_label)}
                     </text>
                     <text x="200" y="188" text-anchor="end" font-size="9" font-weight="700" fill="#8b5cf6">
@@ -845,21 +767,65 @@ def render_bipolar_watch_widget(
                 </svg>
             </div>
 
+            <!-- ── BACK: пространство профилей ── -->
             <div class="metric-face metric-back">
-                <div class="metric-back-shell">
-                    <div class="metric-back-title">{html.escape(title)}</div>
-                    <div class="metric-back-desc">{html.escape(description)}</div>
-                </div>
+                <svg width="{size}" height="{size}" viewBox="-12 -12 244 244" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="0" y="0" width="220" height="220" rx="30"
+                          fill="{SURFACE_BG}" stroke="rgba(59,130,246,0.18)" stroke-width="1"/>
+
+                    <text x="110" y="24" text-anchor="middle" font-size="11" font-weight="700" fill="{TEXT_MAIN}">
+                        Пространство профилей
+                    </text>
+
+                    <!-- Квадранты -->
+                    <rect x="{PLOT_X0}" y="{PLOT_Y0}" width="{PLOT_W/2}" height="{PLOT_H/2}"
+                          fill="rgba(139,92,246,0.22)"/>
+                    <rect x="{PLOT_MID_X}" y="{PLOT_Y0}" width="{PLOT_W/2}" height="{PLOT_H/2}"
+                          fill="rgba(56,189,248,0.18)"/>
+                    <rect x="{PLOT_X0}" y="{PLOT_MID_Y}" width="{PLOT_W/2}" height="{PLOT_H/2}"
+                          fill="rgba(100,116,139,0.10)"/>
+                    <rect x="{PLOT_MID_X}" y="{PLOT_MID_Y}" width="{PLOT_W/2}" height="{PLOT_H/2}"
+                          fill="rgba(249,115,22,0.20)"/>
+
+                    <!-- Рамка и разделители -->
+                    <rect x="{PLOT_X0}" y="{PLOT_Y0}" width="{PLOT_W}" height="{PLOT_H}"
+                          fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
+                    <line x1="{PLOT_MID_X}" y1="{PLOT_Y0}" x2="{PLOT_MID_X}" y2="{PLOT_Y1}"
+                          stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
+                    <line x1="{PLOT_X0}" y1="{PLOT_MID_Y}" x2="{PLOT_X1}" y2="{PLOT_MID_Y}"
+                          stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
+
+                    <!-- Диагональ (нейтральная зона A=I) -->
+                    <line x1="{PLOT_X0}" y1="{PLOT_Y1}" x2="{PLOT_X1}" y2="{PLOT_Y0}"
+                          stroke="rgba(255,255,255,0.20)" stroke-width="0.8" stroke-dasharray="3,3"/>
+
+                    <!-- Подписи квадрантов -->
+                    <text x="{PLOT_X0 + PLOT_W/4:.0f}" y="{PLOT_Y0 + 14:.0f}"
+                          text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">лекция-монолог</text>
+                    <text x="{PLOT_X0 + PLOT_W*3/4:.0f}" y="{PLOT_Y0 + 14:.0f}"
+                          text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">полный курс</text>
+                    <text x="{PLOT_X0 + PLOT_W/4:.0f}" y="{PLOT_Y1 - 5:.0f}"
+                          text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">поверхностное</text>
+                    <text x="{PLOT_X0 + PLOT_W*3/4:.0f}" y="{PLOT_Y1 - 5:.0f}"
+                          text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">туториал</text>
+
+                    <!-- Подписи осей -->
+                    <text x="110" y="206" text-anchor="middle" font-size="8" fill="{TEXT_MUTED}">Инструментальность →</text>
+                    <text x="14" y="114" text-anchor="middle" font-size="8" fill="{TEXT_MUTED}"
+                          transform="rotate(-90,14,114)">Академичность →</text>
+
+                    <!-- Точка видео -->
+                    <circle cx="{dot_x:.1f}" cy="{dot_y:.1f}" r="7"
+                            fill="#F5A623" stroke="{SURFACE_BG}" stroke-width="2.5"/>
+                </svg>
             </div>
         </label>
 
         <script>
-            const arc = document.getElementById("activeArc");
-            const marker = document.getElementById("marker");
-
+            const arc = document.getElementById("activeArc_{widget_id}");
+            const marker = document.getElementById("marker_{widget_id}");
             const total = arc.getTotalLength();
             const point = arc.getPointAtLength(total * {marker_offset} / 100.0);
-
             marker.setAttribute("cx", point.x);
             marker.setAttribute("cy", point.y);
         </script>
@@ -1393,7 +1359,13 @@ def render_result_panel(result: dict):
     st.write(result.get("summary", "Описание пока недоступно."))
 
     metrics = result.get("metrics", {})
-    delivery_profile = metrics.get("delivery_profile", 18)
+
+    academic_level     = metrics.get("academic_level",     random.randint(1, 5))
+    instrumental_level = metrics.get("instrumental_level", random.randint(1, 5))
+    _LEVEL_MID = {1: 0.10, 2: 0.30, 3: 0.52, 4: 0.75, 5: 0.92}
+
+    academic_score     = metrics.get("academic_score",     _LEVEL_MID[academic_level])
+    instrumental_score = metrics.get("instrumental_score", _LEVEL_MID[instrumental_level])
     tech_quality = metrics.get("tech_quality", 82)
     request_match = metrics.get("request_match", 74)
     warnings = result.get("warnings", build_warning_flags(metrics))
@@ -1406,10 +1378,9 @@ def render_result_panel(result: dict):
         left_content, left_spacer = st.columns([1, 0.08], gap="small")
         with left_content:
             render_bipolar_watch_widget(
-                value=delivery_profile,
-                title="Профиль подачи",
-                left_label="Инструмент",
-                right_label="Академия",
+                value=round((academic_score - instrumental_score) * 100),
+                academic_score=academic_score,
+                instrumental_score=instrumental_score,
                 size=280,
             )
 
