@@ -124,7 +124,7 @@ def run(
 
         if aq is not None:
             jf_logic = flag_logic_module.run(
-                audio_score=aq.audio_score,
+                audio_score=aq.score,
                 transcript_text=tr.text,
             )
 
@@ -141,7 +141,7 @@ def run(
         if not skip_video and video_path:
             jf_sensor = flag_sensor_module.run(
                 video_path=video_path,
-                video_score=vq.video_score,
+                video_score=vq.score,
             )
 
     nr = None

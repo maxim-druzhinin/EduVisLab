@@ -159,69 +159,90 @@ def _check_speech_quality(transcript_text: str) -> LogicLLMResult:
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
-def run(audio_score: float, transcript_text: str) -> LogicFlagResult:
-    """
-    Запускает флаг Логик.
-
-    Args:
-        audio_quality: результат модуля audio_quality (уже вычислен в pipeline)
-        transcript_text: полный текст транскрипта
-
-    Returns:
-        LogicFlagResult
-    """
+def run(
+    audio_score: float,
+    transcript_text: str,
+) -> LogicFlagResult:
 
     logger.info("── Флаг Логик: проверка качества звука ──")
+
+
     audio_flag = audio_score < AUDIO_SCORE_THRESHOLD
+
     triggered = []
+
     if audio_flag:
-        triggered.append(f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}")
+        triggered.append(
+            f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}"
+        )
 
     logger.info("── Флаг Логик: LLM-анализ речи ──")
+
     llm_result = _check_speech_quality(transcript_text)
 
-    triggered = []
-    if audio_result.flag:
-        triggered.extend(audio_result.triggered_by)
     if llm_result.flag and not llm_result.error:
+
         if llm_result.fillers_detected:
             triggered.append("fillers")
+
         if llm_result.colloquialisms_detected:
             triggered.append("colloquialisms")
+
         if llm_result.orthoepic_errors_detected:
             triggered.append("orthoepic_errors")
 
-    flag = audio_result.flag or (llm_result.flag and not llm_result.error)
+    flag = (
+        audio_flag
+        or (
+            llm_result.flag
+            and not llm_result.error
+        )
+    )
 
-    # Уверенность: если аудио сработало — уверенность высокая (метрики детерминированы)
-    if audio_result.flag:
+    if audio_flag:
         confidence = 0.95
+
     elif llm_result.flag:
         confidence = llm_result.confidence
+
     else:
-        confidence = max(0.7, llm_result.confidence)
+        confidence = max(
+            0.70,
+            llm_result.confidence,
+        )
 
     return LogicFlagResult(
         flag=flag,
-        confidence=confidence,
+        confidence=round(confidence, 3),
         audio={
-            "flag":         audio_result.flag,
-            "ovrl_mos":     audio_result.ovrl_mos,
-            "sig_mos":      audio_result.sig_mos,
-            "bak_mos":      audio_result.bak_mos,
-            "snr_db":       audio_result.snr_db,
-            "lufs":         audio_result.lufs,
-            "clipping":     audio_result.clipping,
-            "triggered_by": audio_result.triggered_by,
+            "flag": audio_flag,
+            "score": round(audio_score, 3),
+            "threshold": AUDIO_SCORE_THRESHOLD,
+            "triggered_by": (
+                [
+                    f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}"
+                ]
+                if audio_flag
+                else []
+            ),
         },
         speech_quality={
-            "flag":                      llm_result.flag,
-            "fillers_detected":          llm_result.fillers_detected,
-            "colloquialisms_detected":   llm_result.colloquialisms_detected,
-            "orthoepic_errors_detected": llm_result.orthoepic_errors_detected,
-            "examples":                  llm_result.examples,
-            "confidence":                llm_result.confidence,
-            "error":                     llm_result.error,
+            "flag": (
+                llm_result.flag
+                and not llm_result.error
+            ),
+            "fillers_detected":
+                llm_result.fillers_detected,
+            "colloquialisms_detected":
+                llm_result.colloquialisms_detected,
+            "orthoepic_errors_detected":
+                llm_result.orthoepic_errors_detected,
+            "examples":
+                llm_result.examples,
+            "confidence":
+                round(llm_result.confidence, 3),
+            "error":
+                llm_result.error,
         },
         triggered_by=triggered,
     )
