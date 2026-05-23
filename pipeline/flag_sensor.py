@@ -42,6 +42,8 @@ CATEGORY_WEIGHT = {
     "none":             0.0,
 }
 
+VIDEO_SCORE_THRESHOLD = 5.0
+
 # ─── VLM prompt ───────────────────────────────────────────────────────────────
 
 VLM_PROMPT = """\
@@ -129,11 +131,13 @@ class SensorCutResult:
     jerk_scores: list[float] = field(default_factory=list)
     jerk_p90: float = 0.0
     jerk_flag: bool = False
+    jerk_components_p90: dict = field(default_factory=dict)
 
 
 @dataclass
 class SensorFlagResult:
     flag: bool
+    video_quality: dict
     confidence: float
     vlm: dict
     cuts: dict
@@ -261,52 +265,59 @@ def _compute_jerk_score(
     frame_before: np.ndarray,
     frame_after: np.ndarray,
     pose=None,
-) -> float:
+) -> dict:
     """
-    Насколько резкая склейка:
-      1. Histogram distance — общий визуальный сдвиг
-      2. Brightness delta   — перепад яркости
-      3. Pose jump          — смещение центроида плеч (если MediaPipe доступен)
+    Насколько резкая склейка. Возвращает dict с компонентами:
+      - histogram: общий визуальный сдвиг (цвет/сцена)
+      - brightness: перепад яркости
+      - pose: смещение центроида плеч (None если MediaPipe недоступен)
+      - total: среднее доступных компонентов
     """
-    scores = []
-
     # 1. Гистограмма
     hist_b = cv2.calcHist([frame_before], [0, 1, 2], None, [32, 32, 32], [0,256,0,256,0,256])
     hist_a = cv2.calcHist([frame_after],  [0, 1, 2], None, [32, 32, 32], [0,256,0,256,0,256])
     cv2.normalize(hist_b, hist_b)
     cv2.normalize(hist_a, hist_a)
     hist_dist = cv2.compareHist(hist_b, hist_a, cv2.HISTCMP_CHISQR)
-    scores.append(min(hist_dist / 50.0, 1.0))
-
+    hist_score = float(min(hist_dist / 50.0, 1.0))
+ 
     # 2. Перепад яркости
     br_b = np.mean(cv2.cvtColor(frame_before, cv2.COLOR_BGR2GRAY))
     br_a = np.mean(cv2.cvtColor(frame_after,  cv2.COLOR_BGR2GRAY))
-    scores.append(min(abs(br_a - br_b) / 100.0, 1.0))
-
-    # 3. Pose jump — смещение лектора в кадре (новый Tasks API)
+    brightness_score = float(min(abs(br_a - br_b) / 100.0, 1.0))
+ 
+    # 3. Pose jump
+    pose_score = None
     if pose is not None:
         try:
             import mediapipe as mp
-
+ 
             def _get_cx(frame_bgr):
                 rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 res = pose.detect(mp_img)
                 if res.pose_landmarks:
                     lms = res.pose_landmarks[0]
-                    return (lms[11].x + lms[12].x) / 2  # LEFT=11, RIGHT=12
+                    return (lms[11].x + lms[12].x) / 2
                 return None
-
+ 
             cx_b = _get_cx(frame_before)
             cx_a = _get_cx(frame_after)
-
             if cx_b is not None and cx_a is not None:
-                # нормируем: прыжок на 30% ширины кадра = score 1.0
-                scores.append(min(abs(cx_a - cx_b) / 0.3, 1.0))
+                pose_score = float(min(abs(cx_a - cx_b) / 0.3, 1.0))
         except Exception:
-            pass  # если Pose упал — просто не добавляем компонент
-
-    return float(np.mean(scores))
+            pass
+ 
+    components = [hist_score, brightness_score]
+    if pose_score is not None:
+        components.append(pose_score)
+ 
+    return {
+        "histogram":  round(hist_score, 4),
+        "brightness": round(brightness_score, 4),
+        "pose":       round(pose_score, 4) if pose_score is not None else None,
+        "total":      round(float(np.mean(components)), 4),
+    }
 
 
 def _run_cuts(video_path: str) -> SensorCutResult:
@@ -377,27 +388,39 @@ def _run_cuts(video_path: str) -> SensorCutResult:
 
     cap.release()
 
-    jerk_p90  = float(np.percentile(jerk_scores, 90)) if jerk_scores else 0.0
-    jerk_flag = jerk_p90 > JERK_SCORE_P90_THRESHOLD
+# Агрегируем каждый компонент отдельно
+    def _p90(vals):
+        arr = [v for v in vals if v is not None]
+        return round(float(np.percentile(arr, 90)), 4) if arr else None
+ 
+    jerk_p90      = _p90([r["total"]      for r in jerk_scores])
+    hist_p90      = _p90([r["histogram"]  for r in jerk_scores])
+    brightness_p90= _p90([r["brightness"] for r in jerk_scores])
+    pose_p90      = _p90([r["pose"]       for r in jerk_scores])
+ 
+    jerk_p90      = jerk_p90 or 0.0
+    jerk_flag     = jerk_p90 > JERK_SCORE_P90_THRESHOLD
     cut_flag  = cuts_per_min > CUTS_PER_MINUTE_THRESHOLD
-
+ 
     return SensorCutResult(
         cuts_per_minute=round(cuts_per_min, 2),
         total_cuts=total_cuts,
         duration_sec=round(duration_sec, 1),
         flag=cut_flag,
-        jerk_scores=[round(j, 4) for j in jerk_scores],
+        jerk_scores=[r["total"] for r in jerk_scores],
         jerk_p90=round(jerk_p90, 4),
         jerk_flag=jerk_flag,
+        jerk_components_p90={
+            "histogram":  hist_p90,
+            "brightness": brightness_p90,
+            "pose":       pose_p90,
+        },
     )
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
-def run(
-    video_path: str,
-    frame_paths: list[str] | None = None,
-) -> SensorFlagResult:
+def run(video_path: str, frame_paths: list[str] | None = None, video_score: float | None = None) -> SensorFlagResult:
     """
     Запускает флаг Сенсорик.
 
@@ -436,9 +459,20 @@ def run(
         confidence_parts.append(0.9)
     confidence = round(float(np.mean(confidence_parts)) if confidence_parts else 0.0, 3)
 
+    video_quality_flag = (video_score is not None) and (video_score < VIDEO_SCORE_THRESHOLD)
+    if video_quality_flag:
+        triggered.append(f"video_score={video_score:.2f} < {VIDEO_SCORE_THRESHOLD}")
+
+    flag = vlm.flag or cuts.flag or cuts.jerk_flag or video_quality_flag
+
     return SensorFlagResult(
         flag=flag,
         confidence=confidence,
+        video_quality={
+            "flag":      video_quality_flag,
+            "score":     video_score,
+            "threshold": VIDEO_SCORE_THRESHOLD,
+        },
         vlm={
             "flag":          vlm.flag,
             "issues_ratio":  vlm.issues_ratio,
@@ -452,6 +486,7 @@ def run(
             "duration_sec":         cuts.duration_sec,
             "cut_density_flag":     cuts.flag,
             "jerk_p90":             cuts.jerk_p90,
+            "jerk_components_p90":  cuts.jerk_components_p90,
             "jerk_flag":            cuts.jerk_flag,
             "threshold_cuts_pm":    CUTS_PER_MINUTE_THRESHOLD,
             "threshold_jerk_p90":   JERK_SCORE_P90_THRESHOLD,

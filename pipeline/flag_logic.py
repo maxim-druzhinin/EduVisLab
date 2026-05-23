@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Thresholds ───────────────────────────────────────────────────────────────
 
-DNSMOS_THRESHOLD   = 2.5
-SNR_THRESHOLD_DB   = 10.0
-LUFS_THRESHOLD     = -30.0
+AUDIO_SCORE_THRESHOLD = 5.0
 
 # ─── LLM ──────────────────────────────────────────────────────────────────────
 from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL as DEEPSEEK_MODEL
@@ -100,46 +98,6 @@ class LogicFlagResult:
         return asdict(self)
 
 
-# ─── Audio quality check ──────────────────────────────────────────────────────
-
-def _check_audio_quality(audio_quality: dict) -> LogicAudioResult:
-    """Проверяем уже вычисленные метрики качества звука."""
-
-    dnsmos   = audio_quality.get("dnsmos", {})
-    lufs_val = audio_quality.get("lufs", {}).get("value", 0.0)
-    snr_val  = audio_quality.get("snr", {}).get("db", 99.0)
-    clip_lvl = audio_quality.get("clipping", {}).get("level", "none")
-
-    ovrl = dnsmos.get("ovrl_mos", 5.0)
-    sig  = dnsmos.get("sig_mos",  5.0)
-    bak  = dnsmos.get("bak_mos",  5.0)
-
-    triggered = []
-    if ovrl < DNSMOS_THRESHOLD:
-        triggered.append(f"ovrl_mos={ovrl:.2f} < {DNSMOS_THRESHOLD}")
-    if sig < DNSMOS_THRESHOLD:
-        triggered.append(f"sig_mos={sig:.2f} < {DNSMOS_THRESHOLD}")
-    if bak < DNSMOS_THRESHOLD:
-        triggered.append(f"bak_mos={bak:.2f} < {DNSMOS_THRESHOLD}")
-    if snr_val < SNR_THRESHOLD_DB:
-        triggered.append(f"snr={snr_val:.1f}dB < {SNR_THRESHOLD_DB}dB")
-    if clip_lvl == "severe":
-        triggered.append("clipping=severe")
-    if lufs_val < LUFS_THRESHOLD:
-        triggered.append(f"lufs={lufs_val:.1f} < {LUFS_THRESHOLD}")
-
-    return LogicAudioResult(
-        flag=len(triggered) > 0,
-        ovrl_mos=ovrl,
-        sig_mos=sig,
-        bak_mos=bak,
-        snr_db=snr_val,
-        lufs=lufs_val,
-        clipping=clip_lvl,
-        triggered_by=triggered,
-    )
-
-
 # ─── LLM speech quality check ─────────────────────────────────────────────────
 
 def _check_speech_quality(transcript_text: str) -> LogicLLMResult:
@@ -201,10 +159,7 @@ def _check_speech_quality(transcript_text: str) -> LogicLLMResult:
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
-def run(
-    audio_quality: dict,
-    transcript_text: str,
-) -> LogicFlagResult:
+def run(audio_score: float, transcript_text: str) -> LogicFlagResult:
     """
     Запускает флаг Логик.
 
@@ -217,7 +172,10 @@ def run(
     """
 
     logger.info("── Флаг Логик: проверка качества звука ──")
-    audio_result = _check_audio_quality(audio_quality)
+    audio_flag = audio_score < AUDIO_SCORE_THRESHOLD
+    triggered = []
+    if audio_flag:
+        triggered.append(f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}")
 
     logger.info("── Флаг Логик: LLM-анализ речи ──")
     llm_result = _check_speech_quality(transcript_text)
