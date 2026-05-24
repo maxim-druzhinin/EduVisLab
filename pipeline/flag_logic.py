@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 AUDIO_SCORE_THRESHOLD = 5.0
 
 # ─── LLM ──────────────────────────────────────────────────────────────────────
-from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL as DEEPSEEK_MODEL
+from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL_CREATIVE as DEEPSEEK_MODEL
  
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 

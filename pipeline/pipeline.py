@@ -133,15 +133,16 @@ def run(
             transcript_segments=segments_to_dict(tr.segments),
         )
 
-        jf_emotion = flag_emotion_module.run(
-            audio_path=tr.audio_path,
-            device=DEVICE,
-        )
-
         if not skip_video and video_path:
             jf_sensor = flag_sensor_module.run(
                 video_path=video_path,
                 video_score=vq.score,
+            )
+
+            jf_emotion = flag_emotion_module.run(
+                audio_path=tr.audio_path,
+                device=DEVICE,
+                video_path=video_path,
             )
 
     nr = None
