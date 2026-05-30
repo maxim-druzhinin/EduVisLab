@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
  
 AROUSAL_HIGH_MEAN    = 0.75
 AROUSAL_FLAT_MEAN    = 0.30
-AROUSAL_FLAT_STD     = 0.05
+AROUSAL_FLAT_STD     = 0.04
 AROUSAL_VOLATILE_STD = 0.15
 CHUNK_SEC            = 30.0
 SAMPLE_RATE          = 16_000
