@@ -2,8 +2,8 @@
 Флаг «Логик» — качество речевого канала.
 
 Компоненты:
-  1. Технические метрики звука (из audio_quality — уже вычислены)
-  2. LLM-анализ транскрипта: слова-паразиты, просторечия, орфоэпия
+  1. Технические метрики звука (audio_score из audio_quality модуля)
+  2. LLM-анализ транскрипта: слова-паразиты, нелитературная речь
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# ─── Thresholds ───────────────────────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────────────────────────────
 
+from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL_CREATIVE as DEEPSEEK_MODEL
+
+DEEPSEEK_BASE_URL     = "https://api.deepseek.com"
 AUDIO_SCORE_THRESHOLD = 5.0
 
-# ─── LLM ──────────────────────────────────────────────────────────────────────
-from config import DEEPSEEK_API_KEY, NARRATIVE_LLM_MODEL_CREATIVE as DEEPSEEK_MODEL
- 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# ─── Prompt ───────────────────────────────────────────────────────────────────
 
 LOGIC_LLM_PROMPT = r"""
 Ты оцениваешь речевую культуру лектора в YouTube-лекции.
@@ -92,23 +92,12 @@ whisper-сегментации (обрывы фраз, повторы на гр�
 # ─── Data structures ──────────────────────────────────────────────────────────
 
 @dataclass
-class LogicAudioResult:
-    flag: bool
-    ovrl_mos: float
-    sig_mos:  float
-    bak_mos:  float
-    snr_db:   float
-    lufs:     float
-    clipping: str
-    triggered_by: list[str] = field(default_factory=list)
-
-
-@dataclass
 class LogicLLMResult:
     flag: bool
+    fillers_pattern: str
     fillers_detected: bool
-    colloquialisms_detected: bool
-    orthoepic_errors_detected: bool
+    non_literary_pattern: str
+    non_literary_detected: bool
     examples: dict = field(default_factory=dict)
     confidence: float = 0.0
     error: str | None = None
@@ -129,59 +118,64 @@ class LogicFlagResult:
 # ─── LLM speech quality check ─────────────────────────────────────────────────
 
 def _check_speech_quality(transcript_text: str) -> LogicLLMResult:
-    """LLM-анализ транскрипта на паразиты, просторечия, орфоэпию."""
+
+    _empty = LogicLLMResult(
+        flag=False,
+        fillers_pattern="clean", fillers_detected=False,
+        non_literary_pattern="clean", non_literary_detected=False,
+    )
 
     if not DEEPSEEK_API_KEY:
         logger.warning("DEEPSEEK_API_KEY не задан — LLM-анализ пропущен")
-        return LogicLLMResult(flag=False, fillers_detected=False,
-                              colloquialisms_detected=False,
-                              orthoepic_errors_detected=False,
-                              error="no_api_key")
+        return LogicLLMResult(**{**_empty.__dict__, "error": "no_api_key"})
 
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-
-    # Ограничиваем транскрипт чтобы не превысить контекст
-    text_sample = transcript_text
 
     try:
         resp = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             temperature=0.0,
+            extra_body={"thinking": {"type": "enabled"}},
             messages=[
                 {"role": "system", "content": LOGIC_LLM_PROMPT},
-                {"role": "user",   "content": f"Транскрипт лекции:\n\n{text_sample}"},
+                {"role": "user",   "content": f"Транскрипт лекции:\n\n{transcript_text}"},
             ],
         )
-        raw = resp.choices[0].message.content.strip()
+        raw  = resp.choices[0].message.content.strip()
         data = json.loads(raw)
+
     except json.JSONDecodeError as e:
         logger.error(f"LLM вернул невалидный JSON: {e}")
-        return LogicLLMResult(flag=False, fillers_detected=False,
-                              colloquialisms_detected=False,
-                              orthoepic_errors_detected=False,
-                              error=f"json_parse_error: {e}")
+        return LogicLLMResult(**{**_empty.__dict__, "error": f"json_parse_error: {e}"})
     except Exception as e:
         logger.error(f"Ошибка LLM-запроса: {e}")
-        return LogicLLMResult(flag=False, fillers_detected=False,
-                              colloquialisms_detected=False,
-                              orthoepic_errors_detected=False,
-                              error=str(e))
+        return LogicLLMResult(**{**_empty.__dict__, "error": str(e)})
 
-    fillers   = data.get("fillers",   {}).get("detected", False)
-    colloqui  = data.get("colloquialisms", {}).get("detected", False)
-    orthoep   = data.get("orthoepic_errors", {}).get("detected", False)
+    fillers_data      = data.get("fillers", {}) or {}
+    non_literary_data = data.get("non_literary", {}) or {}
+
+    fillers_pattern      = fillers_data.get("pattern", "clean")
+    non_literary_pattern = non_literary_data.get("pattern", "clean")
+    fillers_detected      = bool(fillers_data.get("detected", False))
+    non_literary_detected = bool(non_literary_data.get("detected", False))
+
+    confidence_map = {"clean": 0.85, "natural": 0.70, "excessive": 0.90}
+    confidence = max(
+        confidence_map.get(fillers_pattern, 0.75),
+        confidence_map.get(non_literary_pattern, 0.75),
+    )
 
     return LogicLLMResult(
-        flag=fillers or colloqui or orthoep,
-        fillers_detected=fillers,
-        colloquialisms_detected=colloqui,
-        orthoepic_errors_detected=orthoep,
+        flag=fillers_detected or non_literary_detected,
+        fillers_pattern=fillers_pattern,
+        fillers_detected=fillers_detected,
+        non_literary_pattern=non_literary_pattern,
+        non_literary_detected=non_literary_detected,
         examples={
-            "fillers":    data.get("fillers",   {}).get("examples", []),
-            "colloquialisms": data.get("colloquialisms", {}).get("examples", []),
-            "orthoepic_errors": data.get("orthoepic_errors", {}).get("examples", []),
+            "fillers":      fillers_data.get("examples", []),
+            "non_literary": non_literary_data.get("examples", []),
         },
-        confidence=float(data.get("confidence", 0.5)),
+        confidence=float(confidence),
     )
 
 
@@ -193,84 +187,40 @@ def run(
 ) -> LogicFlagResult:
 
     logger.info("── Флаг Логик: проверка качества звука ──")
-
-
     audio_flag = audio_score < AUDIO_SCORE_THRESHOLD
-
-    triggered = []
-
+    triggered  = []
     if audio_flag:
-        triggered.append(
-            f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}"
-        )
+        triggered.append(f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}")
 
     logger.info("── Флаг Логик: LLM-анализ речи ──")
+    llm = _check_speech_quality(transcript_text)
 
-    llm_result = _check_speech_quality(transcript_text)
+    if llm.flag and not llm.error:
+        if llm.fillers_detected:
+            triggered.append(f"fillers ({llm.fillers_pattern})")
+        if llm.non_literary_detected:
+            triggered.append(f"non_literary ({llm.non_literary_pattern})")
 
-    if llm_result.flag and not llm_result.error:
-
-        if llm_result.fillers_detected:
-            triggered.append("fillers")
-
-        if llm_result.colloquialisms_detected:
-            triggered.append("colloquialisms")
-
-        if llm_result.orthoepic_errors_detected:
-            triggered.append("orthoepic_errors")
-
-    flag = (
-        audio_flag
-        or (
-            llm_result.flag
-            and not llm_result.error
-        )
-    )
-
-    if audio_flag:
-        confidence = 0.95
-
-    elif llm_result.flag:
-        confidence = llm_result.confidence
-
-    else:
-        confidence = max(
-            0.70,
-            llm_result.confidence,
-        )
+    flag = audio_flag or (llm.flag and not llm.error)
+    confidence = 0.95 if audio_flag else (llm.confidence if llm.flag else max(0.7, llm.confidence))
 
     return LogicFlagResult(
         flag=flag,
         confidence=round(confidence, 3),
         audio={
-            "flag": audio_flag,
-            "score": round(audio_score, 3),
+            "flag":      audio_flag,
+            "score":     audio_score,
             "threshold": AUDIO_SCORE_THRESHOLD,
-            "triggered_by": (
-                [
-                    f"audio_score={audio_score:.2f} < {AUDIO_SCORE_THRESHOLD}"
-                ]
-                if audio_flag
-                else []
-            ),
         },
         speech_quality={
-            "flag": (
-                llm_result.flag
-                and not llm_result.error
-            ),
-            "fillers_detected":
-                llm_result.fillers_detected,
-            "colloquialisms_detected":
-                llm_result.colloquialisms_detected,
-            "orthoepic_errors_detected":
-                llm_result.orthoepic_errors_detected,
-            "examples":
-                llm_result.examples,
-            "confidence":
-                round(llm_result.confidence, 3),
-            "error":
-                llm_result.error,
+            "flag":                  llm.flag,
+            "fillers_pattern":       llm.fillers_pattern,
+            "fillers_detected":      llm.fillers_detected,
+            "non_literary_pattern":  llm.non_literary_pattern,
+            "non_literary_detected": llm.non_literary_detected,
+            "examples":              llm.examples,
+            "confidence":            llm.confidence,
+            "error":                 llm.error,
         },
         triggered_by=triggered,
     )

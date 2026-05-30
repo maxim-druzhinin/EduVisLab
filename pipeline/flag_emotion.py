@@ -286,15 +286,18 @@ def _run_movement_analysis(video_path: str) -> dict:
     if window_amplitudes:
         amp_mean = float(np.mean(window_amplitudes))
         vel_mean = float(np.mean(window_velocities))
+
+        centroid_range = centroid_result.get("position_range", 0.0) if centroid_result.get("available") else 0.0
+        gesture_ratio  = amp_mean / (0.1 + centroid_range)
+        gesture_active = gesture_ratio > 1.35
+
         wrist_result = {
             "available":      True,
             "amplitude_mean": round(amp_mean, 4),
             "velocity_mean":  round(vel_mean, 4),
+            "gesture_ratio":  round(gesture_ratio, 4),
             "n_windows":      len(window_amplitudes),
-            "gesture_active": bool(
-                amp_mean > WRIST_AMPLITUDE_THR and
-                vel_mean > WRIST_VELOCITY_THR
-            ),
+            "gesture_active": bool(gesture_active),
         }
  
     return {
@@ -331,7 +334,13 @@ def run(
         movement = _run_movement_analysis(video_path)
  
     triggered = list(arousal.triggered_by)
-    flag = arousal.flat_flag or arousal.high_flag or arousal.volatile_flag
+
+    gesture_active = movement.get("wrist", {}).get("gesture_active", False)
+
+    flag = arousal.flat_flag or arousal.high_flag or arousal.volatile_flag or gesture_active
+
+    if gesture_active:
+        triggered.append("gesture_active")
  
     if arousal.n_chunks == 0:
         confidence = 0.0
