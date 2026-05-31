@@ -130,26 +130,26 @@ def run(
         logger.info("── Модуль: Флаги Юнга ──")
 
         if aq is not None:
-            progress("Расчёт аудио-флага", 64)
+            progress("Расчёт Аудио Дисбаланса", 64)
             jf_logic = flag_logic_module.run(
                 audio_score=aq.score,
                 transcript_text=tr.text,
             )
 
-        progress("Расчёт смыслового флага", 68)
+        progress("Расчёт Смысловая унылость", 68)
         jf_intuit = flag_intuitive_module.run(
             transcript_text=tr.text,
             transcript_segments=segments_to_dict(tr.segments),
         )
 
         if not skip_video and video_path:
-            progress("Расчёт визуального флага", 72)
+            progress("Расчёт Визуального Шума", 72)
             jf_sensor = flag_sensor_module.run(
                 video_path=video_path,
                 video_score=vq.score,
             )
 
-            progress("Расчёт эмоционального флага", 76)
+            progress("Расчёт Эмоционального Дисбаланса", 76)
             jf_emotion = flag_emotion_module.run(
                 audio_path=tr.audio_path,
                 device=DEVICE,

@@ -28,3 +28,5 @@ sentence-transformers
 
 easyocr
 ultralytics
+
+streamlit==1.58.0
