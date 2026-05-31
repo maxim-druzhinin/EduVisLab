@@ -9,7 +9,7 @@ def run(cmd):
 
 def setup_dover():
     if os.path.exists("/tmp/DOVER/pretrained_weights/DOVER.pth"):
-        print("DOVER уже установлен ✅")
+        print("DOVER уже установлен")
         return
 
     run(["rm", "-rf", "/tmp/DOVER"])
@@ -28,12 +28,12 @@ def setup_dover():
         "-O", "/tmp/DOVER/pretrained_weights/DOVER.pth",
     ])
 
-    print("DOVER установлен ✅")
+    print("DOVER установлен")
 
 
 def setup_mediapipe_face_detector():
     if os.path.exists("/tmp/face_detector.tflite"):
-        print("MediaPipe face detector уже скачан ✅")
+        print("MediaPipe face detector уже скачан")
         return
 
     run([
@@ -42,7 +42,7 @@ def setup_mediapipe_face_detector():
         "-O", "/tmp/face_detector.tflite",
     ])
 
-    print("MediaPipe face detector скачан ✅")
+    print("MediaPipe face detector скачан")
 
 
 def setup_all_models():
