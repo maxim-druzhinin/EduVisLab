@@ -4,8 +4,13 @@ import math
 import html
 from urllib.parse import urlparse, parse_qs
 
+import pandas as pd
+import json
+
 import streamlit as st
 import streamlit.components.v1 as components
+
+from pipeline import run as run_pipeline
 
 
 st.set_page_config(
@@ -34,12 +39,22 @@ ACCENT_BLUE = "#60a5fa"
 ACCENT_VIOLET = "#8b5cf6"
 ACCENT_GREEN = "#22c55e"
 
+DEMO_ORANGE = "#f97316"
+DEMO_ORANGE_LIGHT = "#fb923c"
+
 USER_TYPES = [
     "Обучающийся",
-    "Автор контента",
-    "Образовательная организация",
-    "Заказчик контента",
+    "Спикер",
+    "Продакшн",
+    "Заказчик",
 ]
+
+ROLE_ICONS = {
+    "Обучающийся": "🎓",
+    "Спикер": "🎤",
+    "Продакшн": "🎬",
+    "Заказчик": "📋",
+}
 
 LEVELS = [
     "Школьник",
@@ -62,40 +77,294 @@ VIEW_GOALS = [
     "Последовательно изучить тему",
 ]
 
+ROLE_INSTRUCTIONS = {
+    "Обучающийся": {
+        "start": (
+            "Нарратив, темы с таймкодами, пререквизиты, "
+            "пробелы покрытия и профиль подачи."
+        ),
+        "how": (
+            "Проверь, подходит ли видео твоему уровню, цели просмотра "
+            "и текущему запросу. Техническое качество и флаги восприятия "
+            "смотри как возможные барьеры: будет ли видео удобно слушать, "
+            "смотреть и понимать без лишнего напряжения."
+        ),
+    },
+
+    "Спикер": {
+        "start": (
+            "Флаги восприятия и evidence по каждому "
+            "сработавшему флагу."
+        ),
+        "how": (
+            "Смотри, какие особенности речи, темпа, эмоциональности, "
+            "жестикуляции и смысловой динамики могут мешать аудитории. "
+            "Затем проверь профиль подачи: совпадает ли фактический стиль "
+            "объяснения с тем форматом, который ты хотел получить — строгая "
+            "лекция, практический разбор, обзор или tutorial."
+        ),
+    },
+
+    "Продакшн": {
+        "start": (
+            "Техническое качество, визуальный шум, читаемость кадра, "
+            "склейки и оформление доски/слайдов."
+        ),
+        "how": (
+            "Отделяй проблемы записи и упаковки от проблем самого спикера. "
+            "Сначала оцени звук, изображение, монтаж и визуальное оформление. "
+            "Затем переходи к педагогическому анализу, структуре тем, "
+            "пробелам покрытия и профилю подачи: они показывают, насколько "
+            "методически собран материал и соответствует ли форма "
+            "образовательной задаче."
+        ),
+    },
+
+    "Заказчик": {
+        "start": (
+            "Покрытие темы, пробелы покрытия, соответствие названию, "
+            "профиль подачи и нарративная оценка ценности."
+        ),
+        "how": (
+            "Оцени, выполняет ли видео задачу, ради которой создавалось: "
+            "подходит ли оно целевой аудитории, раскрывает ли заявленную тему "
+            "и можно ли его публиковать, принимать или использовать в курсе. "
+            "Техническое качество и флаги восприятия рассматривай как риски "
+            "публикации, приёмки или дальнейшей доработки."
+        ),
+    },
+}
+
+MOCK_NARRATIVE = {
+    "narrative": (
+        "Это видео помогает увидеть цельную картину на стыке известных вам вещей "
+        "из наивной теории множеств и строгого построения анализа. Его ценность не "
+        "столько в списке тем, сколько в том, как плавно связываются операции над "
+        "множествами и законы де Моргана с аксиоматическим определением действительных "
+        "чисел — именно этот переход часто остаётся смазанным в стандартных курсах."
+    ),
+    "segments": [
+        {"title": "Введение и история анализа",
+         "description": "Предмет математического анализа как науки о приближениях, исторический обзор от Ньютона и Лейбница до строгого обоснования Коши, Кантора и Вейерштрасса.",
+         "start": 6.3},
+        {"title": "Множества и основные понятия функций",
+         "description": "Вводятся наивная теория множеств, упорядоченная пара, декартово произведение, формальное определение функции, образа, прообраза, композиции и сужения.",
+         "start": 463.2},
+        {"title": "Классификация функций",
+         "description": "Определяются инъективные, сюръективные и биективные отображения; вводится понятие обратной функции и разбираются примеры.",
+         "start": 1391.1},
+        {"title": "Индексированные семейства и законы де Моргана",
+         "description": "Понятие семейства множеств, индексированного произвольным множеством; операции объединения и пересечения семейств; теорема де Моргана с доказательством.",
+         "start": 2229.0},
+        {"title": "Аксиоматическое определение действительных чисел",
+         "description": "Аксиоматический подход к множеству R: алгебраические аксиомы поля, аксиомы линейного порядка, согласованного с операциями, и аксиома непрерывности, выделяющая R среди полей.",
+         "start": 3400.1},
+    ],
+    "prerequisites": [
+        {"concept": "Наивная теория множеств (принадлежность, включение, операции)", "confidence": "high"},
+        {"concept": "Логические кванторы (для любого, существует)", "confidence": "medium"},
+        {"concept": "Базовые алгебраические структуры (группа, поле)", "confidence": "low"},
+    ],
+    "learning_path": {
+        "type": "intro",
+        "reasoning": "Лекция вводит фундаментальные понятия математического анализа и аксиоматику действительных чисел, начиная с основ.",
+    },
+    "topic_coverage": {
+        "covered": ["Введение и история анализа", "Множества и основные понятия функций",
+                    "Классификация функций", "Индексированные семейства и законы де Моргана",
+                    "Аксиоматическое определение действительных чисел"],
+        "gaps": [],
+    },
+    "info_density": "high",
+    "title_match": {
+        "verdict": "full",
+        "explanation": "Название точно отражает содержание: введение в анализ и подробное обсуждение действительных чисел.",
+    },
+}
+
+
+DEMO_RESULTS_CSV = "validation_dataset/pipeline_results.csv"
+DEMO_NARRATIVE_CSV = "validation_dataset/pipeline_narrative.csv"
+
+
+def _safe_json_loads(value, default):
+    if value is None or pd.isna(value):
+        return default
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def load_demo_results():
+    results_df = pd.read_csv(DEMO_RESULTS_CSV)
+    narrative_df = pd.read_csv(DEMO_NARRATIVE_CSV)
+
+    narrative_by_url = {
+        row["meta.url"]: row
+        for _, row in narrative_df.iterrows()
+    }
+
+    demo_results = []
+
+    for i, row in results_df.iterrows():
+        video_url = row.get("meta.video_url", "")
+        narrative_row = narrative_by_url.get(video_url)
+
+        if narrative_row is not None:
+            narrative = {
+                "narrative": narrative_row.get("narrative.narrative", ""),
+                "segments": _safe_json_loads(narrative_row.get("narrative.segments"), []),
+                "prerequisites": _safe_json_loads(narrative_row.get("narrative.prerequisites"), []),
+                "learning_path": {
+                    "type": narrative_row.get("narrative.learning_path.type", ""),
+                    "reasoning": narrative_row.get("narrative.learning_path.reasoning", ""),
+                },
+                "topic_coverage": {
+                    "covered": _safe_json_loads(narrative_row.get("narrative.topic_coverage.covered"), []),
+                    "gaps": _safe_json_loads(narrative_row.get("narrative.topic_coverage.gaps"), []),
+                },
+                "info_density": narrative_row.get("narrative.info_density", ""),
+                "title_match": {
+                    "verdict": narrative_row.get("narrative.title_match.verdict", ""),
+                    "explanation": narrative_row.get("narrative.title_match.explanation", ""),
+                },
+            }
+        else:
+            narrative = MOCK_NARRATIVE
+
+        academic_score = float(row.get("delivery_profile.academic_score", 0.5) or 0.5)
+        instrumental_score = float(row.get("delivery_profile.instrumental_score", 0.5) or 0.5)
+
+        metrics = {
+            "academic_score": academic_score,
+            "instrumental_score": instrumental_score,
+            "tech_quality": round(float(row.get("technical_quality.score", 0) or 0), 1),
+            "audio_score": row.get("technical_quality.audio_score", None),
+            "video_score": row.get("technical_quality.video_score", None),
+        }
+
+        result = {
+            "id": i + 1,
+            "created_at": str(row.get("meta.processed_at", "")),
+            "video_url": video_url,
+            "video_title": row.get("meta.youtube.title", f"Видео #{i + 1}"),
+            "user_type": "Обучающийся",
+            "audience_level": "Бакалавр (1-2 курс)",
+            "immersion_level": "Знаю частично",
+            "view_goal": "Составить общее представление",
+            "summary": narrative.get("narrative", ""),
+            "metrics": metrics,
+            "narrative": narrative,
+            "warnings": build_warnings_from_row(row),
+        }
+
+        demo_results.append(result)
+
+    return demo_results
+
+
+
+def build_result_from_pipeline_output(pipeline_output: dict, submitted_data: dict) -> dict:
+    meta = pipeline_output.get("meta", {}) or {}
+    youtube = meta.get("youtube", {}) or {}
+    technical = pipeline_output.get("technical_quality", {}) or {}
+    delivery = pipeline_output.get("delivery_profile", {}) or {}
+    narrative = pipeline_output.get("narrative", {}) or {}
+
+    metrics = {
+        "academic_score": float(delivery.get("academic_score", 0.5) or 0.5),
+        "instrumental_score": float(delivery.get("instrumental_score", 0.5) or 0.5),
+        "tech_quality": float(technical.get("score", 0) or 0),
+        "audio_score": technical.get("audio_score"),
+        "video_score": technical.get("video_score"),
+    }
+
+    return {
+        "id": st.session_state.result_counter + 1,
+        "created_at": str(meta.get("processed_at", time.strftime("%Y-%m-%d %H:%M:%S"))),
+        "video_url": meta.get("video_url", submitted_data.get("video_url", "")),
+        "video_title": youtube.get("title") or mock_video_title(submitted_data.get("video_url", ""), st.session_state.result_counter + 1),
+        "user_type": submitted_data.get("user_type", ""),
+        "audience_level": submitted_data.get("audience_level", ""),
+        "immersion_level": submitted_data.get("immersion_level", ""),
+        "view_goal": submitted_data.get("view_goal", ""),
+        "summary": narrative.get("narrative", ""),
+        "metrics": metrics,
+        "narrative": narrative,
+        "warnings": build_warnings_from_pipeline_output(pipeline_output),
+    }
+
+
+def build_warnings_from_pipeline_output(pipeline_output: dict):
+    flags = pipeline_output.get("jung_flags", {}) or {}
+
+    def flag_active(name: str) -> bool:
+        data = flags.get(name, {}) or {}
+        return _csv_bool(data.get("flag", False))
+
+    return [
+        {
+            "title": "Аудио дисбаланс",
+            "description": (
+                "Речь или звук мешают восприятию: заметные особенности голоса, "
+                "тембра, фоновые шумы, слова-паразиты или просторечия."
+            ),
+            "active": flag_active("logic"),
+            "icon_svg": WARNING_ICON_CHAOS,
+        },
+        {
+            "title": "Визуальный шум",
+            "description": (
+                "Избыток визуальных стимулов, мешающих воспринимать содержание: "
+                "резкие склейки, хаотичное движение в кадре или перегруженная сцена."
+            ),
+            "active": flag_active("sensor"),
+            "icon_svg": WARNING_ICON_VISUAL_NOISE,
+        },
+        {
+            "title": "Смысловая унылость",
+            "description": (
+                "Монотонность подачи и бедность идей: однообразная лексика, "
+                "факты без обобщений и связей, затянутое вступление."
+            ),
+            "active": flag_active("intuitive"),
+            "icon_svg": WARNING_ICON_MONOTONY,
+        },
+        {
+            "title": "Эмоциональный дисбаланс",
+            "description": (
+                "Несоответствие эмоционального тона контексту: чрезмерная "
+                "или наоборот полностью отсутствующая эмоциональная окраска речи."
+            ),
+            "active": flag_active("emotion"),
+            "icon_svg": WARNING_ICON_PLACEHOLDER,
+        },
+    ]
+
+
+
+
 WARNING_ICON_CHAOS = """
-<svg width="220" height="180" viewBox="0 0 220 180" xmlns="http://www.w3.org/2000/svg">
-  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="18" cy="88" r="4.5" fill="currentColor" stroke="none"/>
-    <path d="
-      M 30 88
-      C 52 88, 56 78, 68 60
-      C 78 44, 98 48, 98 70
-      C 98 94, 78 108, 58 120
-      C 34 134, 34 154, 58 156
-      C 82 158, 92 138, 82 116
-      C 72 94, 56 72, 44 56
-      C 34 42, 34 26, 50 22
-      C 68 18, 82 34, 80 54
-      C 78 76, 58 88, 52 108
-      C 46 128, 58 146, 82 150
-      C 108 154, 122 140, 128 118
-      C 134 96, 122 78, 104 72
-      C 86 66, 74 78, 74 96
-      C 74 116, 88 132, 112 136
-      C 140 140, 160 126, 160 100
-      C 160 74, 142 60, 120 64
-      C 98 68, 92 88, 102 104
-      C 114 122, 144 126, 166 126
-      C 182 126, 192 122, 200 112
-    "/>
-    <path d="M 188 100 L 202 114 L 188 128"/>
+<svg viewBox="0 0 70 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(35,35) scale(1.2) translate(-58,-58)">
+    <path d="M30.6445 50.1478V66.8655H41.7896L55.721 80.7968V36.2165L41.7896 50.1478H30.6445Z"
+          stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M40.3964 64.9151C40.8581 64.9151 41.2323 64.5409 41.2323 64.0792C41.2323 63.6176 40.8581 63.2433 40.3964 63.2433C39.9348 63.2433 39.5605 63.6176 39.5605 64.0792C39.5605 64.5409 39.9348 64.9151 40.3964 64.9151Z"
+          fill="currentColor" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M64.0801 44.5753L68.2595 51.541L64.0801 58.5067L68.2595 65.4724L64.0801 72.438"
+          stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M72.4395 41.7891L76.6189 50.1479L72.4395 58.5067L76.6189 66.8655L72.4395 75.2243"
+          stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
 """
 
 WARNING_ICON_VISUAL_NOISE = """
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
-stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
   <path d="M0 0h24v24H0z" stroke="none"/>
   <path d="M15.03 17.478A8.8 8.8 0 0 1 12 18q-5.4 0-9-6 3.6-6 9-6t9 6a21 21 0 0 1-.258.419M19 16v3m0 3v.01"/>
   <path d="m12 9-2 3h4l-2 3"/>
@@ -109,12 +378,36 @@ WARNING_ICON_MONOTONY = """
 """
 
 WARNING_ICON_PLACEHOLDER = """
-<svg width="160" height="160" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-  <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="12" cy="12" r="9"/>
-    <path d="M12 8v4"/>
-    <circle cx="12" cy="16" r="0.8" fill="currentColor" stroke="none"/>
-  </g>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <path fill="currentColor" d="M480.037,86.769c-15.324-23.21-41.626-38.564-71.459-38.564c-67.509,0-125.842,39.996-152.577,97.531
+      c-26.735-57.535-85.068-97.531-152.577-97.531c-29.833,0-56.136,15.353-71.459,38.564C13.659,91.123,0,107.6,0,127.217
+      c0,22.93,18.655,41.584,41.585,41.584c7.359,0,14.272-1.93,20.274-5.297c1.734,1.754,3.349,3.655,4.824,5.699
+      c7.63,10.583,10.517,23.475,8.13,36.303c-0.094,0.507-0.16,1.011-0.203,1.513c-15.268,6.161-26.075,21.124-26.075,38.573
+      c0,17.426,10.779,32.373,26.015,38.549v127.465c0,28.776,23.411,52.185,52.186,52.185h260.188
+      c28.776,0,52.186-23.411,52.186-52.185v-127.58c15.081-6.248,25.719-21.119,25.719-38.433c0-17.994-11.489-33.349-27.515-39.129
+      c-0.039-0.319-0.069-0.637-0.129-0.957c-2.387-12.827,0.499-25.719,8.13-36.303c1.474-2.045,3.09-3.945,4.824-5.7
+      c6.002,3.367,12.916,5.297,20.275,5.297c22.93,0,41.584-18.655,41.584-41.584C512,107.6,498.341,91.123,480.037,86.769z
+      M41.585,137.663c-5.761,0.001-10.447-4.685-10.447-10.446c0-5.761,4.686-10.446,10.447-10.446
+      c5.76,0,10.446,4.686,10.446,10.446C52.031,132.977,47.345,137.663,41.585,137.663z M258.738,235.148
+      c5.761,0,10.447,4.686,10.447,10.446c0,5.76-4.687,10.446-10.447,10.446c-5.76,0.001-10.446-4.685-10.446-10.446
+      C248.292,239.834,252.978,235.148,258.738,235.148z M66.43,93.889c9.719-9.019,22.722-14.547,36.994-14.547
+      c72.874,0,132.632,57.191,136.77,129.046c-3.558,1.781-6.825,4.054-9.713,6.733c-8.19,7.6-13.328,18.445-13.328,30.473
+      c0,8.048,2.305,15.564,6.28,21.937l-11.366,9.434l-35.811,29.724l-31.235-27.761l-17.37-15.438
+      c2.597-5.423,4.054-11.492,4.054-17.896c0-15.55-8.585-29.126-21.258-36.258c-1.412-0.794-2.871-1.513-4.378-2.141
+      c2.684-19.936-2.267-39.75-14.126-56.2c-3.143-4.359-6.67-8.327-10.514-11.883c1.128-3.771,1.743-7.762,1.743-11.894
+      C83.171,113.592,76.585,101.478,66.43,93.889z M90.12,256.04c-5.76,0-10.446-4.686-10.446-10.446s4.685-10.446,10.446-10.446
+      s10.447,4.686,10.447,10.446S95.881,256.04,90.12,256.04z M407.973,411.61c0,11.605-9.442,21.047-21.048,21.047H126.737
+      c-11.606,0-21.047-9.442-21.047-21.047v-0.564h302.283V411.61z M407.974,379.907H105.689v-94.275l59.877,53.216
+      c5.75,5.11,14.368,5.254,20.287,0.343l63.865-53.009c2.906,0.646,5.922,0.996,9.021,0.996c2.736,0,5.409-0.273,7.998-0.78
+      l59.013,52.448c2.945,2.617,6.642,3.932,10.344,3.932c3.525,0,7.056-1.193,9.942-3.589l61.937-51.408V379.907z
+      M423.245,256.041c-5.761,0-10.446-4.686-10.446-10.446s4.686-10.446,10.446-10.446s10.446,4.686,10.446,10.446
+      S429.005,256.041,423.245,256.041z M428.831,127.217c0,4.133,0.615,8.123,1.742,11.894c-3.846,3.557-7.371,7.524-10.515,11.883
+      c-11.972,16.606-16.892,36.639-14.038,56.765c-1.014,0.464-2.008,0.963-2.977,1.504c-12.743,7.114-21.383,20.729-21.383,36.33
+      c0,7.049,1.769,13.689,4.876,19.512l-8.431,6.998l-41.667,34.584l-36.343-32.301l-6.656-5.915
+      c4.345-6.568,6.884-14.432,6.884-22.878c0-12.158-5.246-23.113-13.592-30.724c-4.224-3.853-9.248-6.837-14.784-8.697
+      c5.225-70.811,64.507-126.83,136.63-126.83c14.273,0,27.275,5.528,36.994,14.547C435.417,101.479,428.831,113.594,428.831,127.217z
+      M470.415,137.663c-5.76,0-10.446-4.685-10.446-10.446c0-5.761,4.686-10.446,10.446-10.446s10.446,4.686,10.446,10.446
+      C480.861,132.977,476.174,137.663,470.415,137.663z"/>
 </svg>
 """
 
@@ -345,27 +638,87 @@ def render_warning_flags(flags: list[dict], columns: int = 2):
 def build_warning_flags(metrics: dict):
     return [
         {
-            "title": "Хаотичность",
-            "description": "Перескакивание между мыслями, слабая связность и хаотичные переходы в объяснении.",
-            "active": random.random() < 0.4,
+            "title": "Аудио дисбаланс",
+            "description": (
+                "Речь или звук мешают восприятию: заметные особенности голоса, "
+                "тембра, фоновые шумы, слова-паразиты или просторечия."
+            ),
+            "active": True,
             "icon_svg": WARNING_ICON_CHAOS,
         },
         {
             "title": "Визуальный шум",
-            "description": "Лишние движения, отвлекающие элементы в кадре или перегруженная визуальная сцена.",
-            "active": random.random() < 0.3,
+            "description": (
+                "Монотонность подачи и бедность идей: однообразная лексика, "
+                "факты без обобщений и связей, затянутое вступление."
+            ),
+            "active": False,
             "icon_svg": WARNING_ICON_VISUAL_NOISE,
         },
         {
-            "title": "Унылость",
-            "description": "Монотонность, слабая динамика речи и утомляющая однородность подачи.",
-            "active": random.random() < 0.35,
+            "title": "Смысловая унылость",
+            "description": (
+                "Монотонность подачи и бедность идей: однообразная лексика, "
+                "факты без обобщений и связей, затянутое вступление."
+            ),
+            "active": True,
             "icon_svg": WARNING_ICON_MONOTONY,
         },
         {
-            "title": "Эмоциональность",
-            "description": "Временная заглушка под будущий warning-сигнал.",
-            "active": random.random() < 0.2,
+            "title": "Эмоциональный дисбаланс",
+            "description": (
+                "Несоответствие эмоционального тона контексту: чрезмерная "
+                "или наоборот полностью отсутствующая эмоциональная окраска речи."
+            ),
+            "active": True,
+            "icon_svg": WARNING_ICON_PLACEHOLDER,
+        },
+    ]
+
+def _csv_bool(value) -> bool:
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes", "да"}
+
+
+def build_warnings_from_row(row):
+    return [
+        {
+            "title": "Аудио дисбаланс",
+            "description": (
+                "Речь или звук мешают восприятию: заметные особенности голоса, "
+                "тембра, фоновые шумы, слова-паразиты или просторечия."
+            ),
+            "active": _csv_bool(row.get("jung_flags.logic.flag", False)),
+            "icon_svg": WARNING_ICON_CHAOS,
+        },
+        {
+            "title": "Визуальный шум",
+            "description": (
+                "Избыток визуальных стимулов, мешающих воспринимать содержание: "
+                "резкие склейки, хаотичное движение в кадре или перегруженная сцена."
+            ),
+            "active": _csv_bool(row.get("jung_flags.sensor.flag", False)),
+            "icon_svg": WARNING_ICON_VISUAL_NOISE,
+        },
+        {
+            "title": "Смысловая унылость",
+            "description": (
+                "Монотонность подачи и бедность идей: однообразная лексика, "
+                "факты без обобщений и связей, затянутое вступление."
+            ),
+            "active": _csv_bool(row.get("jung_flags.intuitive.flag", False)),
+            "icon_svg": WARNING_ICON_MONOTONY,
+        },
+        {
+            "title": "Эмоциональный дисбаланс",
+            "description": (
+                "Несоответствие эмоционального тона контексту: чрезмерная "
+                "или наоборот полностью отсутствующая эмоциональная окраска речи."
+            ),
+            "active": _csv_bool(row.get("jung_flags.emotion.flag", False)),
             "icon_svg": WARNING_ICON_PLACEHOLDER,
         },
     ]
@@ -417,7 +770,14 @@ def inject_global_styles():
             padding: 1rem 1rem 0.75rem 1rem;
         }}
 
-        
+        .stButton > button[kind="primary"] {{
+            background: linear-gradient(135deg, #f97316 0%, #fb923c 100%) !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(251,146,60,0.45) !important;
+            box-shadow:
+                0 0 18px rgba(249,115,22,0.28),
+                0 10px 24px rgba(0,0,0,0.30) !important;
+        }}
 
         .stTextInput > div > div > input {{
             background: {SURFACE_BG_ELEVATED};
@@ -613,8 +973,8 @@ def render_bipolar_watch_widget(
     left_label: str = "Инструмент",
     right_label: str = "Академия",
     size: int = 280,
-    academic_score: float = 0.5,       # 0..1 из delivery_profile.py
-    instrumental_score: float = 0.5,   # 0..1 из delivery_profile.py
+    academic_score: float = 0.5,
+    instrumental_score: float = 0.5,
 ):
     value = max(-100, min(100, value))
     normalized = (value + 100) / 200
@@ -622,6 +982,7 @@ def render_bipolar_watch_widget(
 
     grad_id = f"grad_bipolar_{abs(value)}_{random.randint(1000,9999)}"
     widget_id = f"bipolar_{random.randint(100000,999999)}"
+    info_id = f"info_{random.randint(100000,999999)}"
 
     value_text = str(abs(value))
 
@@ -658,17 +1019,15 @@ def render_bipolar_watch_widget(
     else:
         marker_fill = blend("#8b5cf6", "#6d28d9", (t - 0.82) / 0.18)
 
-    # ── Scatter plot: координаты точки ─────────────────────────────────────
-    # Область графика: x [32..188], y [40..188]
     PLOT_X0, PLOT_X1 = 32, 188
     PLOT_Y0, PLOT_Y1 = 40, 188
-    PLOT_W = PLOT_X1 - PLOT_X0   # 156
-    PLOT_H = PLOT_Y1 - PLOT_Y0   # 148
-    PLOT_MID_X = PLOT_X0 + PLOT_W / 2  # 110
-    PLOT_MID_Y = PLOT_Y0 + PLOT_H / 2  # 114
+    PLOT_W = PLOT_X1 - PLOT_X0
+    PLOT_H = PLOT_Y1 - PLOT_Y0
+    PLOT_MID_X = PLOT_X0 + PLOT_W / 2
+    PLOT_MID_Y = PLOT_Y0 + PLOT_H / 2
 
     dot_x = PLOT_X0 + instrumental_score * PLOT_W
-    dot_y = PLOT_Y1 - academic_score * PLOT_H  # Y инвертирован в SVG
+    dot_y = PLOT_Y1 - academic_score * PLOT_H
 
     html_block = f"""
     <!DOCTYPE html>
@@ -686,36 +1045,127 @@ def render_bipolar_watch_widget(
             font-family: {FONT_STACK};
             overflow: visible;
         }}
-        .metric-toggle {{ display: none; }}
+
+        .metric-toggle,
+        .metric-info-toggle {{
+            display: none;
+        }}
+
         .metric-card {{
             position: relative;
             width: {size}px;
             height: {size}px;
-            cursor: pointer;
         }}
+
         .metric-face {{
             position: absolute;
             inset: 0;
             transition: opacity 0.22s ease, transform 0.22s ease;
         }}
-        .metric-front {{ opacity: 1; transform: scale(1); }}
-        .metric-back  {{ opacity: 0; transform: scale(0.97); }}
+
+        .metric-front {{
+            opacity: 1;
+            transform: scale(1);
+            cursor: pointer;
+        }}
+
+        .metric-back {{
+            opacity: 0;
+            transform: scale(0.97);
+            pointer-events: none;
+        }}
+
         .metric-toggle:checked + .metric-card .metric-front {{
-            opacity: 0; transform: scale(0.97); pointer-events: none;
+            opacity: 0;
+            transform: scale(0.97);
+            pointer-events: none;
         }}
+
         .metric-toggle:checked + .metric-card .metric-back {{
-            opacity: 1; transform: scale(1);
+            opacity: 1;
+            transform: scale(1);
+            pointer-events: auto;
         }}
-        svg {{ overflow: visible; display: block; }}
-        svg text {{ font-family: {FONT_STACK}; }}
+
+        .back-click-layer {{
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            cursor: pointer;
+        }}
+
+        .profile-plane {{
+            position: relative;
+            z-index: 2;
+            opacity: 1;
+            transform: scale(1);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+            pointer-events: none;
+        }}
+
+        .profile-info {{
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            opacity: 0;
+            transform: scale(0.97);
+            pointer-events: none;
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }}
+
+        .metric-info-toggle:checked ~ .profile-plane {{
+            opacity: 0;
+            transform: scale(0.97);
+        }}
+
+        .metric-info-toggle:checked ~ .profile-info {{
+            opacity: 1;
+            transform: scale(1);
+        }}
+
+        .info-btn {{
+            position: absolute;
+            top: 26px;
+            right: 26px;
+            z-index: 6;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            border: 1px solid rgba(139,92,246,0.38);
+            background: rgba(139,92,246,0.13);
+            color: #c4b5fd;
+            font-size: 13px;
+            font-weight: 800;
+            line-height: 20px;
+            text-align: center;
+            cursor: pointer;
+            box-sizing: border-box;
+            user-select: none;
+        }}
+
+        .info-btn:hover {{
+            background: rgba(139,92,246,0.22);
+            color: #ffffff;
+        }}
+
+        svg {{
+            overflow: visible;
+            display: block;
+        }}
+
+        svg text {{
+            font-family: {FONT_STACK};
+        }}
     </style>
     </head>
+
     <body>
         <input type="checkbox" id="{widget_id}" class="metric-toggle">
-        <label for="{widget_id}" class="metric-card">
 
-            <!-- ── FRONT: спидометр ── -->
-            <div class="metric-face metric-front">
+        <div class="metric-card">
+
+            <!-- FRONT -->
+            <label for="{widget_id}" class="metric-face metric-front">
                 <svg width="{size}" height="{size}" viewBox="-12 -12 244 244" xmlns="http://www.w3.org/2000/svg">
                     <defs>
                         <linearGradient id="{grad_id}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -729,6 +1179,7 @@ def render_bipolar_watch_widget(
                             <stop offset="82%"  stop-color="#8b5cf6"/>
                             <stop offset="100%" stop-color="#6d28d9"/>
                         </linearGradient>
+
                         <filter id="cardGlow" x="-16%" y="-16%" width="132%" height="132%">
                             <feDropShadow dx="0" dy="0"  stdDeviation="0.3" flood-color="rgba(59,130,246,0.12)"/>
                             <feDropShadow dx="0" dy="12" stdDeviation="12"  flood-color="rgba(0,0,0,0.28)"/>
@@ -747,6 +1198,7 @@ def render_bipolar_watch_widget(
 
                     <path d="M 55 150 A 60 60 0 1 1 165 150"
                           fill="none" stroke="{TRACK_BG}" stroke-width="18" stroke-linecap="round"/>
+
                     <path id="activeArc_{widget_id}" d="M 55 150 A 60 60 0 1 1 165 150"
                           fill="none" stroke="url(#{grad_id})" stroke-width="18"
                           stroke-linecap="round" pathLength="100"/>
@@ -758,18 +1210,24 @@ def render_bipolar_watch_widget(
                         {value_text}
                     </text>
 
-                    <text x="20"  y="188" text-anchor="start" font-size="9" font-weight="700" fill="#f59e0b">
+                    <text x="20" y="188" text-anchor="start" font-size="9" font-weight="700" fill="#f59e0b">
                         {html.escape(left_label)}
                     </text>
+
                     <text x="200" y="188" text-anchor="end" font-size="9" font-weight="700" fill="#8b5cf6">
                         {html.escape(right_label)}
                     </text>
                 </svg>
-            </div>
+            </label>
 
-            <!-- ── BACK: пространство профилей ── -->
+            <!-- BACK -->
             <div class="metric-face metric-back">
-                <svg width="{size}" height="{size}" viewBox="-12 -12 244 244" xmlns="http://www.w3.org/2000/svg">
+                <label for="{widget_id}" class="back-click-layer"></label>
+
+                <input type="checkbox" id="{info_id}" class="metric-info-toggle">
+                <label for="{info_id}" class="info-btn">i</label>
+
+                <svg class="profile-plane" width="{size}" height="{size}" viewBox="-12 -12 244 244" xmlns="http://www.w3.org/2000/svg">
                     <rect x="0" y="0" width="220" height="220" rx="30"
                           fill="{SURFACE_BG}" stroke="rgba(59,130,246,0.18)" stroke-width="1"/>
 
@@ -777,49 +1235,81 @@ def render_bipolar_watch_widget(
                         Пространство профилей
                     </text>
 
-                    <!-- Квадранты -->
-                    <rect x="{PLOT_X0}" y="{PLOT_Y0}" width="{PLOT_W/2}" height="{PLOT_H/2}"
-                          fill="rgba(139,92,246,0.22)"/>
-                    <rect x="{PLOT_MID_X}" y="{PLOT_Y0}" width="{PLOT_W/2}" height="{PLOT_H/2}"
-                          fill="rgba(56,189,248,0.18)"/>
-                    <rect x="{PLOT_X0}" y="{PLOT_MID_Y}" width="{PLOT_W/2}" height="{PLOT_H/2}"
-                          fill="rgba(100,116,139,0.10)"/>
-                    <rect x="{PLOT_MID_X}" y="{PLOT_MID_Y}" width="{PLOT_W/2}" height="{PLOT_H/2}"
-                          fill="rgba(249,115,22,0.20)"/>
+                    <rect x="{PLOT_X0}" y="{PLOT_Y0}" width="{PLOT_W/2}" height="{PLOT_H/2}" fill="rgba(139,92,246,0.22)"/>
+                    <rect x="{PLOT_MID_X}" y="{PLOT_Y0}" width="{PLOT_W/2}" height="{PLOT_H/2}" fill="rgba(56,189,248,0.18)"/>
+                    <rect x="{PLOT_X0}" y="{PLOT_MID_Y}" width="{PLOT_W/2}" height="{PLOT_H/2}" fill="rgba(100,116,139,0.10)"/>
+                    <rect x="{PLOT_MID_X}" y="{PLOT_MID_Y}" width="{PLOT_W/2}" height="{PLOT_H/2}" fill="rgba(249,115,22,0.20)"/>
 
-                    <!-- Рамка и разделители -->
                     <rect x="{PLOT_X0}" y="{PLOT_Y0}" width="{PLOT_W}" height="{PLOT_H}"
                           fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
+
                     <line x1="{PLOT_MID_X}" y1="{PLOT_Y0}" x2="{PLOT_MID_X}" y2="{PLOT_Y1}"
                           stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
+
                     <line x1="{PLOT_X0}" y1="{PLOT_MID_Y}" x2="{PLOT_X1}" y2="{PLOT_MID_Y}"
                           stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
 
-                    <!-- Диагональ (нейтральная зона A=I) -->
                     <line x1="{PLOT_X0}" y1="{PLOT_Y1}" x2="{PLOT_X1}" y2="{PLOT_Y0}"
                           stroke="rgba(255,255,255,0.20)" stroke-width="0.8" stroke-dasharray="3,3"/>
 
-                    <!-- Подписи квадрантов -->
                     <text x="{PLOT_X0 + PLOT_W/4:.0f}" y="{PLOT_Y0 + 14:.0f}"
                           text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">лекция-монолог</text>
+
                     <text x="{PLOT_X0 + PLOT_W*3/4:.0f}" y="{PLOT_Y0 + 14:.0f}"
                           text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">полный курс</text>
+
                     <text x="{PLOT_X0 + PLOT_W/4:.0f}" y="{PLOT_Y1 - 5:.0f}"
                           text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">поверхностное</text>
+
                     <text x="{PLOT_X0 + PLOT_W*3/4:.0f}" y="{PLOT_Y1 - 5:.0f}"
                           text-anchor="middle" font-size="7.5" fill="rgba(148,163,184,0.85)">туториал</text>
 
-                    <!-- Подписи осей -->
                     <text x="110" y="206" text-anchor="middle" font-size="8" fill="{TEXT_MUTED}">Инструментальность →</text>
+
                     <text x="14" y="114" text-anchor="middle" font-size="8" fill="{TEXT_MUTED}"
                           transform="rotate(-90,14,114)">Академичность →</text>
 
-                    <!-- Точка видео -->
                     <circle cx="{dot_x:.1f}" cy="{dot_y:.1f}" r="7"
                             fill="#F5A623" stroke="{SURFACE_BG}" stroke-width="2.5"/>
                 </svg>
+
+                <div class="profile-info">
+                    <svg width="{size}" height="{size}" viewBox="-12 -12 244 244" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="0" y="0" width="220" height="220" rx="30"
+                              fill="{SURFACE_BG}" stroke="rgba(59,130,246,0.18)" stroke-width="1"/>
+
+                        <text x="110" y="34" text-anchor="middle" font-size="12" font-weight="700" fill="{TEXT_MAIN}">
+                            Что показывает профиль
+                        </text>
+                        <foreignObject x="24" y="46" width="172" height="128">
+                            <div xmlns="http://www.w3.org/1999/xhtml" style="
+                                color:{TEXT_MUTED};
+                                font-family:{FONT_STACK};
+                                font-size:10.7px;
+                                line-height:1.35;
+                                text-align:left;
+                            ">
+                                <b style="color:#c4b5fd;">Академичность</b> —
+                                стремление объяснить, почему и как
+                                устроен предмет изучения, через
+                                теорию и обобщения.
+
+                                <br/>
+
+                                <b style="color:#38bdf8;">Инструментальность</b> —
+                                стремление показать, что и как делать:
+                                алгоритмы, шаги, техники и способы
+                                решения практических задач.
+                            </div>
+                        </foreignObject>
+
+                        <text x="110" y="194" text-anchor="middle" font-size="8" fill="{TEXT_SOFT}">
+                            i — вернуться к плоскости
+                        </text>
+                    </svg>
+                </div>
             </div>
-        </label>
+        </div>
 
         <script>
             const arc = document.getElementById("activeArc_{widget_id}");
@@ -841,8 +1331,8 @@ def render_quality_watch_widget(
     subtitle: str = "звук · видео",
     size: int = 280,
 ):
-    value = max(0, min(100, value))
-    marker_offset = value
+    value = max(0, min(10, value))
+    marker_offset = value * 10
 
     grad_id = f"grad_quality_{value}_{random.randint(1000,9999)}"
     widget_id = f"quality_{random.randint(100000,999999)}"
@@ -866,7 +1356,7 @@ def render_quality_watch_widget(
             lerp(b1, b2, t),
         ))
 
-    t = value / 100.0
+    t = value / 10.0
     if t <= 0.20:
         marker_fill = blend("#ef4444", "#f97316", t / 0.20)
     elif t <= 0.45:
@@ -877,8 +1367,9 @@ def render_quality_watch_widget(
         marker_fill = blend("#84cc16", "#22c55e", (t - 0.70) / (1.00 - 0.70))
 
     description = (
-        "Заглушка описания метрики. Здесь будет пояснение, что входит в техническое качество: "
-        "чёткость изображения, качество звука, читаемость и общая аккуратность визуальной подачи."
+        "Оценивает, насколько комфортно смотреть и слушать видео: "
+        "качество звука, чёткость изображения, стабильность кадра, "
+        "читаемость доски или экрана и отсутствие технических помех."
     )
 
     html_block = f"""
@@ -1026,7 +1517,7 @@ def render_quality_watch_widget(
                         stroke-width="18"
                         stroke-linecap="round"
                         pathLength="100"
-                        stroke-dasharray="{value} 100"
+                        stroke-dasharray="{value * 10} 100"
                     />
 
                     <circle
@@ -1143,6 +1634,421 @@ def render_match_bar(
     render_html_block(bar_html, height=185, width=None)
 
 
+def render_role_instruction(user_type: str):
+    """Карточка-инструкция зависящая от роли. Вставить ПЕРЕД st.video()."""
+    instr = ROLE_INSTRUCTIONS.get(user_type)
+    if not instr:
+        return
+ 
+    html_block = f"""
+    <div style="
+        background: {SURFACE_BG};
+        border: 1px solid {BORDER};
+        border-radius: 20px;
+        padding: 18px 22px 16px 22px;
+        margin-bottom: 16px;
+        font-family: {FONT_STACK};
+        box-shadow:
+            0 0 0 1px rgba(59,130,246,0.12),
+            0 8px 24px rgba(0,0,0,0.22);
+    ">
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            margin-bottom:10px;
+        ">
+            <div style="
+                font-size: 0.78rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: {TEXT_SOFT};
+            ">
+                Как читать этот отчёт
+            </div>
+
+            <div style="
+                padding: 4px 10px;
+                border-radius: 999px;
+                background: rgba(139,92,246,0.12);
+                border: 1px solid rgba(139,92,246,0.35);
+                color: {ACCENT_VIOLET};
+                font-size: 0.72rem;
+                font-weight: 700;
+                white-space: nowrap;
+            ">
+                {ROLE_ICONS.get(user_type, "👤")} Выбрана роль: {html.escape(user_type)}
+            </div>
+        </div>
+ 
+        <div style="
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        ">
+            <div style="flex: 1; min-width: 200px;">
+                <div style="font-size: 0.78rem; font-weight: 700; color: {ACCENT_CYAN}; margin-bottom: 4px;">
+                    С чего начать
+                </div>
+                <div style="font-size: 0.87rem; color: {TEXT_MUTED}; line-height: 1.5;">
+                    {html.escape(instr['start'])}
+                </div>
+            </div>
+            <div style="flex: 2; min-width: 260px;">
+                <div style="font-size: 0.78rem; font-weight: 700; color: {ACCENT_VIOLET}; margin-bottom: 4px;">
+                    Как читать
+                </div>
+                <div style="font-size: 0.87rem; color: {TEXT_MUTED}; line-height: 1.5;">
+                    {html.escape(instr['how'])}
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+    role_instruction_heights = {
+        "Обучающийся": 165,
+        "Спикер": 185,
+        "Продакшн": 205,
+        "Заказчик": 185,
+    }
+
+    render_html_block(
+        html_block,
+        height=role_instruction_heights.get(user_type, 205),
+    )
+ 
+ 
+def _fmt_timecode(seconds: float) -> str:
+    seconds = int(seconds)
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+ 
+ 
+def render_narrative_and_timecodes(result: dict):
+    """
+    Блок: нарратив во всю ширину + двухколоночная секция (таймкоды 70% / доп инфо 30%).
+    Вставить ПОСЛЕ render_match_bar() в render_result_panel().
+    """
+    narrative_data = result.get("narrative", {})
+    narrative_text = narrative_data.get("narrative", "")
+    segments       = narrative_data.get("segments", [])
+    prerequisites  = narrative_data.get("prerequisites", [])
+    gaps           = narrative_data.get("topic_coverage", {}).get("gaps", [])
+    covered        = narrative_data.get("topic_coverage", {}).get("covered", [])
+    info_density   = narrative_data.get("info_density", "")
+    learning_path  = narrative_data.get("learning_path", {})
+    title_match    = narrative_data.get("title_match", {})
+    video_url      = result.get("video_url", "")
+ 
+    # ── Нарратив во всю ширину ───────────────────────────────────────────────
+    if narrative_text:
+        narrative_html = f"""
+        <div style="
+            background: {SURFACE_BG};
+            border: 1px solid {BORDER};
+            border-radius: 20px;
+            padding: 20px 24px;
+            margin-bottom: 18px;
+            font-family: {FONT_STACK};
+            box-shadow:
+                0 0 0 1px rgba(59,130,246,0.10),
+                0 8px 20px rgba(0,0,0,0.20);
+        ">
+            <div style="
+                font-size: 0.78rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: {TEXT_SOFT};
+                margin-bottom: 10px;
+            ">О видео</div>
+            <div style="
+                font-size: 0.97rem;
+                color: {TEXT_MAIN};
+                line-height: 1.65;
+            ">{html.escape(narrative_text)}</div>
+        </div>
+        """
+    narrative_height = 90 + math.ceil(len(narrative_text) / 110) * 22
+    render_html_block(narrative_html, height=narrative_height)
+ 
+    # ── Двухколоночная секция ────────────────────────────────────────────────
+    left_col, right_col = st.columns([6.5, 3.5], gap="small")
+ 
+    # ── Левая колонка: таймкоды ──────────────────────────────────────────────
+    with left_col:
+        if segments:
+            # Строим YouTube deep-link: ?t=секунды
+            def yt_link(url: str, start: float) -> str:
+                if not url:
+                    return "#"
+                base = url.split("&t=")[0].split("?t=")[0]
+                sep = "&" if "?" in base else "?"
+                return f"{base}{sep}t={int(start)}"
+ 
+            items_html = ""
+            for seg in segments:
+                title       = html.escape(seg.get("title", ""))
+                description = html.escape(seg.get("description", ""))
+                start       = seg.get("start", 0)
+                tc          = _fmt_timecode(start)
+                link        = yt_link(video_url, start)
+ 
+                items_html += f"""
+                <div style="
+                    display: flex;
+                    gap: 14px;
+                    padding: 12px 0;
+                    border-bottom: 1px solid {BORDER};
+                    align-items: flex-start;
+                ">
+                    <a href="{link}" target="_blank" style="
+                        flex-shrink: 0;
+                        display: inline-block;
+                        padding: 3px 10px;
+                        background: {SURFACE_BG_ELEVATED};
+                        border: 1px solid {BORDER};
+                        border-radius: 8px;
+                        font-size: 0.78rem;
+                        font-weight: 700;
+                        color: {ACCENT_CYAN};
+                        text-decoration: none;
+                        white-space: nowrap;
+                        margin-top: 2px;
+                        font-family: 'SF Mono', 'Fira Code', monospace;
+                    ">{tc}</a>
+                    <div>
+                        <div style="
+                            font-size: 0.92rem;
+                            font-weight: 700;
+                            color: {TEXT_MAIN};
+                            margin-bottom: 3px;
+                            line-height: 1.3;
+                        ">{title}</div>
+                        <div style="
+                            font-size: 0.82rem;
+                            color: {TEXT_MUTED};
+                            line-height: 1.45;
+                        ">{description}</div>
+                    </div>
+                </div>
+                """
+ 
+            timecodes_html = f"""
+            <div style="
+                background: {SURFACE_BG};
+                border: 1px solid {BORDER};
+                border-radius: 20px;
+                padding: 16px 20px 8px 20px;
+                font-family: {FONT_STACK};
+                box-shadow:
+                    0 0 0 1px rgba(59,130,246,0.10),
+                    0 8px 20px rgba(0,0,0,0.20);
+            ">
+                <div style="
+                    font-size: 0.78rem;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                    letter-spacing: 0.08em;
+                    color: {TEXT_SOFT};
+                    margin-bottom: 6px;
+                ">Темы и таймкоды</div>
+                {items_html}
+            </div>
+            """
+            est_height = 70
+
+            for seg in segments:
+                title_len = len(seg.get("title", ""))
+                desc_len = len(seg.get("description", ""))
+
+                title_lines = max(1, math.ceil(title_len / 58))
+                desc_lines = max(1, math.ceil(desc_len / 90))
+
+                est_height += 26 + title_lines * 25 + desc_lines * 16 + 10
+
+            est_height += 60
+            render_html_block(timecodes_html, height=est_height)
+ 
+    # ── Правая колонка: доп инфо ─────────────────────────────────────────────
+    with right_col:
+        density_labels = {
+            "low":    ("Низкая",    TEXT_MUTED),
+            "medium": ("Средняя",   ACCENT_BLUE),
+            "high":   ("Высокая",   ACCENT_VIOLET),
+        }
+        density_text, density_color = density_labels.get(
+            info_density, ("—", TEXT_SOFT)
+        )
+ 
+        path_labels = {
+            "intro":          ("Вводная лекция",          ACCENT_CYAN),
+            "part_of_course": ("Часть курса",             ACCENT_BLUE),
+            "standalone":     ("Самостоятельная тема",    ACCENT_GREEN),
+        }
+        path_text, path_color = path_labels.get(
+            learning_path.get("type", ""), ("—", TEXT_SOFT)
+        )
+ 
+        match_labels = {
+            "full":    ("Точное",    ACCENT_GREEN),
+            "partial": ("Частичное", ACCENT_BLUE),
+            "none":    ("Не совпадает", "#ef4444"),
+        }
+        match_text, match_color = match_labels.get(
+            title_match.get("verdict", ""), ("—", TEXT_SOFT)
+        )
+ 
+        # Пресреквизиты
+        prereqs_html = ""
+        if prerequisites:
+            conf_colors = {
+                "high":   ACCENT_GREEN,
+                "medium": ACCENT_BLUE,
+                "low":    TEXT_MUTED,
+            }
+            conf_labels = {"high": "нужно", "medium": "желательно", "low": "полезно"}
+            for p in prerequisites:
+                concept = html.escape(p.get("concept", ""))
+                conf    = p.get("confidence", "medium")
+                c_color = conf_colors.get(conf, TEXT_MUTED)
+                c_label = conf_labels.get(conf, "")
+                prereqs_html += f"""
+                <div style="
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    gap: 8px;
+                    padding: 6px 0;
+                    border-bottom: 1px solid {BORDER};
+                    font-size: 0.82rem;
+                ">
+                    <span style="color: {TEXT_MAIN}; line-height: 1.4;">{concept}</span>
+                    <span style="
+                        flex-shrink: 0;
+                        font-size: 0.72rem;
+                        font-weight: 600;
+                        color: {c_color};
+                        padding-top: 2px;
+                    ">{c_label}</span>
+                </div>
+                """
+ 
+        # Пробелы
+        gaps_html = ""
+        if gaps:
+            for g in gaps:
+                gaps_html += f"""
+                <div style="
+                    padding: 5px 0;
+                    border-bottom: 1px solid {BORDER};
+                    font-size: 0.82rem;
+                    color: {TEXT_MUTED};
+                ">· {html.escape(g)}</div>
+                """
+        else:
+            gaps_html = f"""
+            <div style="font-size:0.82rem; color:{TEXT_SOFT}; padding: 5px 0;">
+                Пробелов не выявлено
+            </div>
+            """
+ 
+        side_html = f"""
+        <div style="
+            background: {SURFACE_BG};
+            border: 1px solid {BORDER};
+            border-radius: 20px;
+            padding: 16px 18px;
+            font-family: {FONT_STACK};
+            box-shadow:
+                0 0 0 1px rgba(59,130,246,0.10),
+                0 8px 20px rgba(0,0,0,0.20);
+        ">
+            <!-- Быстрые метки -->
+            <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
+ 
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:0.78rem; color:{TEXT_SOFT};">Плотность</span>
+                    <span style="font-size:0.82rem; font-weight:700; color:{density_color};">{density_text}</span>
+                </div>
+ 
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:0.78rem; color:{TEXT_SOFT};">Тип видео</span>
+                    <span style="font-size:0.82rem; font-weight:700; color:{path_color};">{path_text}</span>
+                </div>
+ 
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:0.78rem; color:{TEXT_SOFT};">Название</span>
+                    <span style="font-size:0.82rem; font-weight:700; color:{match_color};">{match_text}</span>
+                </div>
+ 
+            </div>
+ 
+            <div style="height:1px; background:{BORDER}; margin-bottom:14px;"></div>
+ 
+            <!-- Пресреквизиты -->
+            <div style="
+                font-size: 0.75rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: {TEXT_SOFT};
+                margin-bottom: 6px;
+            ">Нужно знать заранее</div>
+            {prereqs_html}
+ 
+            <div style="height:1px; background:{BORDER}; margin: 14px 0;"></div>
+ 
+            <!-- Пробелы -->
+            <div style="
+                font-size: 0.75rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: {TEXT_SOFT};
+                margin-bottom: 6px;
+            ">Пробелы в покрытии</div>
+            {gaps_html}
+ 
+            <!-- Пояснение к названию -->
+            {"" if not title_match.get("explanation") else f'''
+            <div style="height:1px; background:{BORDER}; margin: 14px 0;"></div>
+            <div style="font-size:0.78rem; color:{TEXT_MUTED}; line-height:1.45;">
+                {html.escape(title_match.get("explanation",""))}
+            </div>
+            '''}
+        </div>
+        """
+ 
+        est_side_height = 150
+
+        for p in prerequisites:
+            concept_len = len(p.get("concept", ""))
+            concept_lines = max(1, math.ceil(concept_len / 28))
+            est_side_height += 20 + concept_lines * 17
+
+        if gaps:
+            for g in gaps:
+                gap_lines = max(1, math.ceil(len(g) / 30))
+                est_side_height += 14 + gap_lines * 17
+        else:
+            est_side_height += 34
+
+        if title_match.get("explanation"):
+            explanation_len = len(title_match.get("explanation", ""))
+            explanation_lines = max(1, math.ceil(explanation_len / 32))
+            est_side_height += 32 + explanation_lines * 17
+
+        est_side_height += 28
+
+        render_html_block(side_html, height=est_side_height)
+
+
 def init_state():
     defaults = {
         "app_state": "idle",
@@ -1249,16 +2155,18 @@ def render_tag(text: str, bg: str = SURFACE_BG_ELEVATED, color: str = "#93c5fd")
     )
 
 
-def render_metric_bar(label: str, value: int, color: str) -> str:
-    value = max(0, min(100, value))
+def render_metric_bar(label: str, value: float, color: str, display_value: str | None = None) -> str:
+    bar_value = max(0, min(100, value))
+    shown = display_value if display_value is not None else f"{bar_value:g}"
+
     return f"""
     <div style="margin: 8px 0 10px 0; font-family:{FONT_STACK};">
         <div style="display:flex;justify-content:space-between;font-size:0.9rem;margin-bottom:4px;color:{TEXT_MAIN};">
             <span>{html.escape(label)}</span>
-            <span><b>{value}</b></span>
+            <span><b>{shown}</b></span>
         </div>
         <div style="width:100%;height:8px;background:{TRACK_BG};border-radius:999px;overflow:hidden;">
-            <div style="width:{value}%;height:100%;background:{color};border-radius:999px;"></div>
+            <div style="width:{bar_value}%;height:100%;background:{color};border-radius:999px;"></div>
         </div>
     </div>
     """
@@ -1295,7 +2203,12 @@ def build_mock_result():
             "Здесь будет храниться краткое текстовое описание видео, "
             "вывод о его структуре, качестве подачи и соответствии выбранной аудитории."
         ),
-        "metrics": metrics,
+        "metrics" :{
+            "academic_score":     0.75,
+            "instrumental_score": 0.10,
+            "tech_quality":       5.1,
+        },
+        "narrative": MOCK_NARRATIVE,
         "warnings": build_warning_flags(metrics),
     }
     return result
@@ -1334,7 +2247,17 @@ def render_running_panel():
         st.session_state.progress_step += 1
         st.rerun()
     else:
-        result = build_mock_result()
+        st.session_state.result_counter += 1
+
+        pipeline_output = run_pipeline(
+            st.session_state.submitted_data["video_url"],
+            user_params=st.session_state.submitted_data,
+        )
+
+        result = build_result_from_pipeline_output(
+            pipeline_output,
+            st.session_state.submitted_data,
+        )
 
         st.session_state.current_result = result
         st.session_state.results_history.insert(0, result)
@@ -1349,14 +2272,20 @@ def render_running_panel():
 def render_result_panel(result: dict):
     st.markdown("## Результат анализа")
 
+    submitted_data = st.session_state.submitted_data or {}
+    user_type = submitted_data.get("user_type", "Обучающийся")
+    render_role_instruction(user_type)
+
+    st.markdown(
+        "<div style='height:0px; margin-top:-1034px;'></div>",
+        unsafe_allow_html=True,
+    )
+
     video_url = result.get("video_url", "")
     if video_url:
         st.video(video_url)
     else:
         st.info("Превью видео недоступно.")
-
-    st.markdown("### Краткое описание")
-    st.write(result.get("summary", "Описание пока недоступно."))
 
     metrics = result.get("metrics", {})
 
@@ -1399,11 +2328,13 @@ def render_result_panel(result: dict):
                 size=280,
             )
 
-    render_match_bar(
-        value=request_match,
-        title="Соответствие запросу",
-        subtitle="интегральная метрика соответствия видео выбранному сценарию",
-    )
+    # render_match_bar(
+    #     value=request_match,
+    #     title="Соответствие запросу",
+    #     subtitle="интегральная метрика соответствия видео выбранному сценарию",
+    # )
+
+    render_narrative_and_timecodes(result)
 
 
 def render_history_panel():
@@ -1444,21 +2375,28 @@ def render_history_panel():
 
             st.write(item["summary"])
 
+            academic_score = float(metrics.get("academic_score", 0))
+            instrumental_score = float(metrics.get("instrumental_score", 0))
+            tech_quality = float(metrics.get("tech_quality", 0))
+
             bars_html = (
                 render_metric_bar(
-                    "Профиль подачи",
-                    int((metrics.get("delivery_profile", 0) + 100) / 2),
+                    "Академичность",
+                    academic_score * 100,
                     ACCENT_VIOLET,
+                    display_value=f"{academic_score * 100:.0f}",
+                )
+                + render_metric_bar(
+                    "Инструментальность",
+                    instrumental_score * 100,
+                    ACCENT_CYAN,
+                    display_value=f"{instrumental_score * 100:.0f}",
                 )
                 + render_metric_bar(
                     "Тех. качество",
-                    metrics.get("tech_quality", 0),
+                    tech_quality * 10,
                     ACCENT_GREEN,
-                )
-                + render_metric_bar(
-                    "Соответствие",
-                    metrics.get("request_match", 0),
-                    ACCENT_CYAN,
+                    display_value=f"{tech_quality:g}",
                 )
             )
             render_html_block(bars_html, height=170)
@@ -1543,7 +2481,30 @@ st.title("Анализ образовательного видео")
 left_col, right_col = st.columns([1, 2.5], gap="large")
 
 with left_col:
+
+    if st.button("Демо-режим: готовые результаты", width="stretch", type="primary", icon="🚀"):
+        demo_results = load_demo_results()
+
+        st.session_state.demo_user_type = "Обучающийся"
+        st.session_state.demo_audience_level = "Бакалавр (1-2 курс)"
+        st.session_state.demo_immersion_level = "Знаю частично"
+        st.session_state.demo_view_goal = "Составить общее представление"
+
+        st.session_state.submitted_data = {
+            "video_url": demo_results[0]["video_url"],
+            "user_type": "Обучающийся",
+            "audience_level": "Бакалавр (1-2 курс)",
+            "immersion_level": "Знаю частично",
+            "view_goal": "Составить общее представление",
+        }
+        st.session_state.current_result = demo_results[0]
+        st.session_state.results_history = demo_results
+        st.session_state.has_result = True
+        st.session_state.app_state = "done"
+        st.rerun()
+
     with st.form("video_input_form"):
+        
         st.markdown("### Ссылка на видео")
 
         if "video_url" in st.session_state.form_errors:
@@ -1562,6 +2523,7 @@ with left_col:
             "Тип пользователя",
             options=USER_TYPES,
             label_visibility="collapsed",
+            key="demo_user_type",
         )
 
         st.divider()
@@ -1576,6 +2538,7 @@ with left_col:
             "Уровень образования",
             options=LEVELS,
             label_visibility="collapsed",
+            key="demo_audience_level",
         )
 
         st.divider()
@@ -1588,6 +2551,7 @@ with left_col:
             "Уровень погружённости",
             options=IMMERSION_LEVELS,
             label_visibility="collapsed",
+            key="demo_immersion_level",
         )
 
         st.divider()
@@ -1600,6 +2564,7 @@ with left_col:
             "Цель просмотра",
             options=VIEW_GOALS,
             label_visibility="collapsed",
+            key="demo_view_goal",
         )
 
         st.divider()
