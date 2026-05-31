@@ -10,7 +10,7 @@ import json
 import streamlit as st
 import streamlit.components.v1 as components
 
-from pipeline import run as run_pipeline
+from pipeline.pipeline import run as run_pipeline
 
 
 st.set_page_config(
@@ -2215,49 +2215,33 @@ def build_mock_result():
 
 
 def render_running_panel():
-    steps = [
-        ("Получение и проверка ссылки", 15),
-        ("Подготовка метаданных видео", 35),
-        ("Извлечение признаков", 60),
-        ("Формирование промежуточных оценок", 80),
-        ("Подготовка итоговой выдачи", 100),
-    ]
-
-    current_step = st.session_state.progress_step
-    step_text, step_value = steps[current_step]
-
     st.markdown("## Выполняется анализ")
     st.write("Система обрабатывает видео и подготавливает результат.")
 
-    st.progress(step_value, text=step_text)
-    st.markdown(f"### {step_text}")
+    progress_bar = st.progress(0, text="Подготовка к запуску")
+    status_placeholder = st.empty()
 
-    st.markdown("### Этапы анализа")
-    for i, (name, _) in enumerate(steps):
-        if i < current_step:
-            st.success(f"✓ {name}")
-        elif i == current_step:
-            st.info(f"⏳ {name}")
-        else:
-            st.write(f"• {name}")
+    def update_progress(text: str, value: int):
+        value = max(0, min(100, int(value)))
+        progress_bar.progress(value, text=text)
+        status_placeholder.info(f"⏳ {text}")
 
-    time.sleep(1)
-
-    if current_step < len(steps) - 1:
-        st.session_state.progress_step += 1
-        st.rerun()
-    else:
-        st.session_state.result_counter += 1
+    try:
+        update_progress("Запуск пайплайна", 1)
 
         pipeline_output = run_pipeline(
             st.session_state.submitted_data["video_url"],
             user_params=st.session_state.submitted_data,
+            progress_callback=update_progress,
         )
 
         result = build_result_from_pipeline_output(
             pipeline_output,
             st.session_state.submitted_data,
         )
+
+        st.session_state.result_counter += 1
+        result["id"] = st.session_state.result_counter
 
         st.session_state.current_result = result
         st.session_state.results_history.insert(0, result)
@@ -2266,7 +2250,14 @@ def render_running_panel():
         st.session_state.app_state = "done"
         st.session_state.has_result = True
         st.session_state.progress_step = 0
+
+        update_progress("Готово", 100)
         st.rerun()
+
+    except Exception as e:
+        st.session_state.app_state = "idle"
+        st.session_state.has_result = False
+        st.error(f"Ошибка при анализе видео: {e}")
 
 
 def render_result_panel(result: dict):
@@ -2490,6 +2481,10 @@ with left_col:
         st.session_state.demo_immersion_level = "Знаю частично"
         st.session_state.demo_view_goal = "Составить общее представление"
 
+        st.session_state.results_history = []
+        st.session_state.current_result = None
+        st.session_state.result_counter = 0
+
         st.session_state.submitted_data = {
             "video_url": demo_results[0]["video_url"],
             "user_type": "Обучающийся",
@@ -2499,6 +2494,7 @@ with left_col:
         }
         st.session_state.current_result = demo_results[0]
         st.session_state.results_history = demo_results
+        st.session_state.result_counter = len(demo_results)
         st.session_state.has_result = True
         st.session_state.app_state = "done"
         st.rerun()
@@ -2586,6 +2582,11 @@ if submitted:
         st.rerun()
     else:
         st.session_state.form_errors = {}
+
+        st.session_state.results_history = []
+        st.session_state.current_result = None
+        st.session_state.result_counter = 0
+
         st.session_state.submitted_data = {
             "video_url": video_url.strip(),
             "user_type": user_type,
@@ -2593,6 +2594,7 @@ if submitted:
             "immersion_level": immersion_level,
             "view_goal": view_goal,
         }
+
         st.session_state.app_state = "running"
         st.session_state.progress_step = 0
         st.rerun()

@@ -84,7 +84,8 @@ def run(
     skip_narrative: bool = False,
     skip_delivery_profile: bool = False,
     skip_jung_flags: bool = False,
-    user_params: dict | None = None, 
+    user_params: dict | None = None,
+    progress_callback=None,
 ) -> dict:
     
     started_at = datetime.now().isoformat()
@@ -92,12 +93,19 @@ def run(
     tr, aq, dl, vq = None, None, None, None
     metadata = None
 
+    def progress(text: str, value: int):
+        if progress_callback is not None:
+            progress_callback(text, value)
+
     if not skip_transcription:
+        progress("Получение метаданных и транскрибация видео", 10)
         logger.info("── Модуль 1: Транскрипция ──")
         tr = transcription_module.run(url)
         metadata = transcription_module.fetch_metadata(url) if not skip_narrative else {}
 
+
     if not skip_audio:
+        progress("Оценка качества звука", 30)
         logger.info("── Модуль 2: Качество звука ──")
         aq = audio_quality_module.run(tr.audio_path)
         _aq_dict = {
@@ -107,38 +115,41 @@ def run(
             "clipping": {"level": aq.clipping_level},
         }
 
-    # if not skip_dullness:
-    #     logger.info("── Модуль 3: Унылость ──")
-    #     dl = dullness_module.run(tr, aq, tr.audio_path)
 
     if not skip_video:
+        progress("Оценка качества изображения", 45)
         logger.info("── Модуль 4: Качество видео ──")
         video_path = video_quality_module.download_video(url)
         vq = video_quality_module.run(video_path)
-    
+
 
     jf_logic = jf_intuit = jf_emotion = jf_sensor = None
 
     if not skip_jung_flags and tr is not None:
+        progress("Расчёт флагов восприятия", 60)
         logger.info("── Модуль: Флаги Юнга ──")
 
         if aq is not None:
+            progress("Расчёт аудио-флага", 64)
             jf_logic = flag_logic_module.run(
                 audio_score=aq.score,
                 transcript_text=tr.text,
             )
 
+        progress("Расчёт смыслового флага", 68)
         jf_intuit = flag_intuitive_module.run(
             transcript_text=tr.text,
             transcript_segments=segments_to_dict(tr.segments),
         )
 
         if not skip_video and video_path:
+            progress("Расчёт визуального флага", 72)
             jf_sensor = flag_sensor_module.run(
                 video_path=video_path,
                 video_score=vq.score,
             )
 
+            progress("Расчёт эмоционального флага", 76)
             jf_emotion = flag_emotion_module.run(
                 audio_path=tr.audio_path,
                 device=DEVICE,
@@ -150,6 +161,7 @@ def run(
         if user_params is None:
             logger.warning("user_params не передан — нарратив пропущен")
         else:
+            progress("Формирование нарратива и таймкодов", 84)
             logger.info("── Модуль 5: Нарратив ──")
             nr = narrative_module.run(
                 segments=[{"text": s.text, "start": s.start, "end": s.end}
@@ -160,6 +172,7 @@ def run(
 
     dp = None
     if not skip_delivery_profile and tr is not None and metadata and user_params:
+        progress("Расчёт профиля подачи", 94)
         logger.info("── Модуль: Профиль подачи ──")
         dp = delivery_profile_module.run(
             transcript_text=tr.text,
@@ -300,7 +313,8 @@ def run(
             "sensor": jf_sensor.to_dict()    if jf_sensor  else {"skipped": True},
         },
     }
-
+    
+    progress("Сборка итогового отчёта", 100)
     logger.info("═══ Пайплайн завершён ═══")
     return result
 
